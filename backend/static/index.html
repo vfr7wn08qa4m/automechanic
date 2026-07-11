@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoMech — поиск кейсов</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 12px; }
+  h1 { font-size: 1.3rem; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  input { padding: 8px; border-radius: 6px; border: 1px solid #8884; }
+  #q { flex: 1 1 320px; }
+  .flt { width: 110px; }
+  button { padding: 8px 16px; border-radius: 6px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  .card { border: 1px solid #8884; border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+  .score { float: right; color: #888; font-size: .85rem; }
+  .meta { color: #888; font-size: .85rem; }
+  .cause { margin-top: 6px; }
+  #answer { white-space: pre-wrap; background: #8881; border-radius: 8px; padding: 12px; margin-top: 12px; display: none; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+<h1>🔧 AutoMech — база кейсов автоэлектрики</h1>
+<div class="row">
+  <input id="q" placeholder="симптом: например, дизель не заводится, стартер щёлкает" autofocus>
+</div>
+<div class="row">
+  <input class="flt" id="make" placeholder="марка">
+  <input class="flt" id="model" placeholder="модель">
+  <input class="flt" id="system" placeholder="система">
+  <input class="flt" id="dtc" placeholder="DTC">
+  <input class="flt" id="lang" placeholder="язык">
+  <button id="go">Искать</button>
+  <button id="ask">Спросить ИИ</button>
+</div>
+<div id="answer"></div>
+<div id="results"></div>
+<script>
+const $ = id => document.getElementById(id);
+const filters = () => ({make: $('make').value, model: $('model').value,
+                        system: $('system').value, dtc: $('dtc').value, lang: $('lang').value});
+function renderResults(items) {
+  $('results').innerHTML = items.length ? '' : '<p>Ничего не найдено.</p>';
+  for (const r of items) {
+    const p = r.payload;
+    const el = document.createElement('div');
+    el.className = 'card';
+    const applBadge = {universal: '🌍 универсально', engine_type: '⚙️ ' + (p.applicability_note || 'тип двигателя'),
+                       make: '🏷 вся марка'}[p.applicability] || '';
+    const sounds = (p.sounds || []).join('; ');
+    el.innerHTML = `<span class="score">${r.mode} ${r.score}</span>
+      <b>${p.title || '(без названия)'}</b>
+      <div class="meta">${[p.make, p.model, p.system, (p.dtc_codes||[]).join(' '), applBadge].filter(Boolean).join(' | ')}</div>
+      ${sounds ? `<div class="meta">🔊 ${sounds}</div>` : ''}
+      <div>${p.problem_summary || ''}</div>
+      <div class="cause">💡 ${p.root_cause || ''}</div>
+      <div><a href="${p.url}" target="_blank">Источник</a></div>`;
+    $('results').appendChild(el);
+  }
+}
+async function doSearch() {
+  const params = new URLSearchParams({q: $('q').value, ...filters()});
+  const r = await fetch('/search?' + params);
+  renderResults((await r.json()).results || []);
+}
+async function doAsk() {
+  $('ask').disabled = true;
+  $('answer').style.display = 'block';
+  $('answer').textContent = 'ИИ думает над кейсами…';
+  try {
+    const r = await fetch('/answer', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({q: $('q').value, filters: filters()})});
+    const data = await r.json();
+    $('answer').textContent = data.answer || data.note || data.error || 'нет ответа';
+    renderResults(data.results || []);
+  } finally { $('ask').disabled = false; }
+}
+$('go').onclick = doSearch;
+$('ask').onclick = doAsk;
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+</script>
+</body>
+</html>

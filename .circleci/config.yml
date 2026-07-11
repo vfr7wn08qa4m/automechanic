@@ -1,0 +1,121 @@
+# CircleCI: ВСЕ этапы в облаке, домашняя машина не нужна (только мониторинг).
+#
+# Титры добываются цепочкой провайдеров (pipeline/subtitle_providers.py):
+# yt-dlp (сдохнет на DC IP — не страшно) -> Invidious-зеркала -> Supadata API;
+# для yt-dlp в CI можно задать YTDLP_PROXY (residential-прокси).
+# Дистилляция и индексация — чистые API-вызовы, DC IP не мешает.
+#
+# ПАРНЫЕ АККАУНТЫ (удвоение бесплатного тира):
+#   аккаунт A: scheduled pipeline в чётные минуты (напр. "0,10,20,..."),
+#              параметр partition=even
+#   аккаунт B: нечётные минуты ("5,15,25,..."), partition=odd
+# Партиция делит work items по чётности id + каждый айтем клеймится атомарно
+# (rev-test в ADO) — оба аккаунта работают по одной очереди без гонок.
+#
+# Секреты: Organization Settings -> Contexts -> контекст "automech"
+# (см. docs/circleci-setup.md): ADO_ORG, ADO_PROJECT, ADO_PAT, DISTILL_API_KEY,
+# S3_*, QDRANT_*, SUPADATA_API_KEY, YTDLP_PROXY, EMBED_REMOTE_URL...
+#
+# Расписание: App -> Project Settings -> Triggers -> Scheduled Trigger,
+# параметр pipeline.partition задаётся в форме триггера.
+
+version: 2.1
+
+parameters:
+  partition:
+    type: enum
+    enum: ["even", "odd", "solo"]
+    default: "solo"
+  batch-size:
+    type: integer
+    default: 10
+  crawl-zone:
+    type: string
+    default: "a"        # a=RU (carmasters,drive2) b=EN c=прочие — см. forum_sites.py
+  flow:
+    type: enum
+    enum: ["conveyor", "crawl"]
+    default: "conveyor"   # какой воркфлоу запускает этот триггер
+
+executors:
+  py:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: small
+
+jobs:
+  crawl-forums:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install -q -r requirements.txt
+      - run:
+          name: краул форумов зоны -> посты в R2 -> тикеты ADO (state:subs)
+          no_output_timeout: 22m
+          command: |
+            python scripts/ci_crawl.py --zone << pipeline.parameters.crawl-zone >> --minutes 18
+
+  fetch-subtitles:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install -q "yt-dlp[default,curl-cffi]" -r requirements.txt
+      - run:
+          name: state:new -> transcript -> R2 -> state:subs
+          no_output_timeout: 30m
+          command: |
+            python scripts/ci_fetch_subs.py \
+              --batch << pipeline.parameters.batch-size >> \
+              --partition << pipeline.parameters.partition >>
+
+  distill:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install -q -r requirements.txt
+      - run:
+          name: state:subs -> LLM case -> R2 -> state:distilled
+          no_output_timeout: 45m
+          command: |
+            python scripts/local_distill_batch.py \
+              --batch << pipeline.parameters.batch-size >> \
+              --partition << pipeline.parameters.partition >>
+
+  embed-index:
+    executor: py
+    steps:
+      - checkout
+      - run: pip install -q -r requirements.txt
+      - run:
+          name: state:distilled -> bge-m3 -> Qdrant -> state:indexed
+          command: |
+            python scripts/embed_index_batch.py --batch 50 \
+              --partition << pipeline.parameters.partition >>
+
+workflows:
+  # Основной конвейер (титры/дистилляция/индекс). Форумы наполняют state:subs
+  # напрямую краулером, поэтому distill их подхватывает наравне с видео.
+  conveyor:
+    when:
+      equal: ["conveyor", << pipeline.parameters.flow >>]
+    jobs:
+      - fetch-subtitles:
+          context: automech
+      - distill:
+          context: automech
+          requires: [fetch-subtitles]
+      - embed-index:
+          context: automech
+          requires: [distill]
+
+  # Краул форумов — отдельный воркфлоу, дёргается своим scheduled trigger'ом.
+  # Зона задаётся параметром crawl-zone в форме триггера:
+  #   аккаунт A, чётные часы  -> crawl-zone=a (RU: carmasters, drive2)
+  #   аккаунт B, нечётные часы -> crawl-zone=b (EN: vwvortex, bimmerforums, bobistheoilguy)
+  # Разные зоны = разные хосты в разное время: один IP не молотит один форум.
+  crawl:
+    when:
+      equal: ["crawl", << pipeline.parameters.flow >>]
+    jobs:
+      - crawl-forums:
+          context: automech

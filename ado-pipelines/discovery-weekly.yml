@@ -1,0 +1,68 @@
+# Azure DevOps: еженедельный discovery.
+# Шаг 1: поиск НОВЫХ каналов по ~24 языкам -> Epic на каждый канал
+#        ([ch:UCxxx], kind:channel, state:active).
+# Шаг 2: дельта по АКТИВНЫМ эпикам (paused пропускаются) -> новые видео ->
+#        child work items (state:new) под своим каналом.
+#
+# «База данных» = сам ADO: Epic-каналы + child-видео. Файл в S3
+# (registry/channels.json) — только кэш/бэкап, не источник истины.
+#
+# Требует YOUTUBE_API_KEY (официальный Data API v3 — работает с Microsoft-hosted
+# агентов; yt-dlp-режим на DC IP не работает). Квота: ~24 seed-запроса × 100 units
+# + дельта каналов по 1-2 units = ~3k units из бесплатных 10k/день.
+#
+# Настройка: Pipelines -> New -> Existing YAML; Library -> variable group
+# 'automech-secrets' (см. docs/ado-setup.md).
+
+trigger: none
+
+schedules:
+  - cron: "0 4 * * 1"          # каждый понедельник 04:00 UTC
+    displayName: weekly-discovery
+    branches:
+      include: [main]
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: automech-secrets
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: "3.12"
+
+  - script: pip install -r requirements.txt
+    displayName: deps
+
+  - script: |
+      python -m pipeline.youtube_discovery --discover-seeds --create-workitems
+    displayName: discover new channels (24 languages) -> Epics
+    env:
+      YOUTUBE_API_KEY: $(YOUTUBE_API_KEY)
+      ADO_ORG: $(System.CollectionUri)
+      ADO_PROJECT: $(System.TeamProject)
+      ADO_PAT: $(ADO_PAT_SECRET)
+      S3_ENDPOINT: $(S3_ENDPOINT)
+      S3_KEY: $(S3_KEY)
+      S3_SECRET: $(S3_SECRET)
+      S3_BUCKET: $(S3_BUCKET)
+
+  - script: |
+      python -m pipeline.youtube_discovery --sync-all --create-workitems --max-videos 50
+    displayName: sync channels -> work items
+    env:
+      YOUTUBE_API_KEY: $(YOUTUBE_API_KEY)
+      ADO_ORG: $(System.CollectionUri)
+      ADO_PROJECT: $(System.TeamProject)
+      ADO_PAT: $(ADO_PAT_SECRET)
+      S3_ENDPOINT: $(S3_ENDPOINT)
+      S3_KEY: $(S3_KEY)
+      S3_SECRET: $(S3_SECRET)
+      S3_BUCKET: $(S3_BUCKET)
+
+  - publish: data/channels.json
+    artifact: channels-registry
+    displayName: publish channels registry (copy)

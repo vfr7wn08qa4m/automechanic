@@ -1,0 +1,7 @@
+yt-dlp>=2026.1.1
+requests>=2.32
+pydantic>=2.7
+openai>=1.60
+python-dotenv>=1.0
+boto3>=1.34        # S3-совместимые хранилища: Cloudflare R2 / Backblaze B2
+beautifulsoup4>=4.12  # парсинг форумов

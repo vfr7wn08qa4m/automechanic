@@ -1,0 +1,45 @@
+# ADO Pipeline #1 — ПОИСК ДЕЛЬТЫ (каждые 12 ч).
+# Делает ТРИ вещи: (1) свои каналы из my_channels.txt -> Epic + видео;
+# (2) поиск НОВЫХ каналов на YouTube по ~24 языкам (троттлится раз/сутки внутри);
+# (3) дельта по активным каналам -> новые видео -> Task'и в New.
+# Дедуп: Custom.url (exists_url) + дети чанков. YouTube Data API работает с
+# hosted-агента (DC IP не банит). Форумы триггерит dispatch (CircleCI-краул).
+#
+# Бюджет ADO 1800 мин/мес: каждые 12ч = ~60 прогонов/мес, timeout 15 -> ≤900 мин
+# в худшем, типично ~360. Настройка: Pipelines -> New -> Existing YAML;
+# variable group automech-secrets. См. docs/ado-setup.md.
+
+trigger: none
+
+schedules:
+  - cron: "15 */12 * * *"      # каждые 12 часов в :15
+    displayName: delta-12h
+    branches: { include: [main] }
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  - group: automech-secrets
+
+jobs:
+- job: delta
+  timeoutInMinutes: 15         # жёсткий кап, чтобы зависший прогон не съел бюджет
+  steps:
+  - task: UsePythonVersion@0
+    inputs: { versionSpec: "3.12" }
+  - script: pip install -r requirements.txt
+    displayName: deps
+  - script: python -m pipeline.controller delta --max-videos 50
+    displayName: delta (свои каналы + поиск новых + дельта -> New)
+    env:
+      YOUTUBE_API_KEY: $(YOUTUBE_API_KEY)
+      ADO_ORG: $(System.CollectionUri)
+      ADO_PROJECT: $(System.TeamProject)
+      ADO_PAT: $(ADO_PAT_SECRET)
+      DISCOVER_INTERVAL_H: "24"
+      S3_ENDPOINT: $(S3_ENDPOINT)
+      S3_KEY: $(S3_KEY)
+      S3_SECRET: $(S3_SECRET)
+      S3_BUCKET: $(S3_BUCKET)

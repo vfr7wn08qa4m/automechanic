@@ -1,0 +1,16 @@
+name: automech
+description: AutoMech — база кейсов ремонта автоэлектрики
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+  url_launcher: ^6.2.0
+
+flutter:
+  uses-material-design: true

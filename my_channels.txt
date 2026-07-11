@@ -1,0 +1,40 @@
+# Свои / приоритетные YouTube-каналы. По одному на строку.
+# Контроллер (delta-пайплайн, каждые 12ч) заводит под них Epic и ставит все
+# видео в очередь на парс; перепарс по новой схеме — pipeline.tools
+# reparse-channel <channel_id>.
+#
+# ФОРМАТ (по надёжности):
+#   UC-id            UCWkZTUaVTDz0obxxagQQkQg          <- лучший, без сети
+#   /channel/ URL    https://www.youtube.com/channel/UC...   <- тоже без сети
+#   @handle          https://www.youtube.com/@AUTODUSHNILA   <- резолв через yt-dlp
+# Ниже — UC-id (резолвнуты из @handle по HTTP 2026-07-11): в CI не нужен yt-dlp,
+# ноль риска 429. В комментарии — исходный @handle и название канала.
+
+# --- RU автоэлектрики/диагносты ---
+UCCkFoGmKTJeV6NJIzGanghg   # @tachkavplus            Тачка в ПЛЮС
+UCG4yz4wtp2E5S62L06yqC9w   # @ildarauto              ИЛЬДАР АВТО-ПОДБОР
+UCDCEX-W5aoQCqsFKAK0OAgg   # @garage_electro         Гараж Автоэлектрика
+UCWkZTUaVTDz0obxxagQQkQg   # @besh_el                УСПЕШНЫЙ АВТОЭЛЕКТРИК
+UCoIYU07BO1LDpIT_X1JvNpg   # @stopline74             StopLine Автоэлектрик Диагност
+UCNN0VqUQwkSN90nHvLpKNBw   # @TaksebeElectric        Так себе электрик…
+UCBRD2cT8xv6HSBspaPV9X7Q   # @Autoalyosha            Автоэлектрик Алёша
+UCJhNBLXD4GPTx7aYvt2e6bA   # @garage_electrolife     Гараж Автоэлектрика Life
+UCTkhNoo7NxB66WcyLMH_1qA   # @putautoelektrika       Путь Автоэлектрика
+UCC492BS_DUo3ScrXgUPJDew   # @parenszavoda3529       Paren s ZAVODA
+
+# --- EN автоэлектрики/диагносты ---
+UCk_lcDzEWLs5fVRYceK3-9Q   # @ElectricalCarRepairLIVE  Electrical Car Repair LIVE
+UCEKt2bUDBoRUw3wpPpDOUaA   # @TheCarCareNut          The Car Care Nut
+UCV8ISIAn_R9qSwZ8fOaUTug   # @MechanicMindset        Mechanic Mindset
+UCeTEeyB_p1Q8Cr_oDEQVWIg   # @Ecutestinglimited      ECU TESTING
+UCR73yN7vT7-P541g2qlfRrg   # @Diagnosedan            DiagnoseDan
+UCxzsGzNaf85PAb0uXWTlWPw   # @AdeptApe               Adept Ape
+UCtr07mdKhsUwVJjL8Kw_q5A   # @WeberAuto              WeberAuto
+UCft4zGZ-FKG-hgiw_yulNxQ   # @PetesGarage            Pete's Garage
+UCSuU164EqM407ylgClYRhDw   # @Lancemechanics         Lance Mechanics
+UCuJ5b8iBWgbfgZgG8lYeA0w   # @RustbeltMechanic       Rustbelt Mechanic
+UCp-nhl9hSvsrPLCZf9VtOrw   # @ReignitedAuto          Reignited - Cycle and Automotive
+UC2gRQKQgI3CsrcnMuHPyYsQ   # @HumbleMechanic         HumbleMechanic
+UCHl8nHPqf-uc9EHiza5r4hw   # @AutomotiveDiagnosis    Automotive Diagnosis
+UCoKjAu8tbtGC55m-2Sb5_NA   # @BuddysDIY              Buddy's DIY
+UCes1EvRjcKU4sY_UEavndBw   # @chrisfix               ChrisFix

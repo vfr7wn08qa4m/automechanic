@@ -1,0 +1,16 @@
+.env
+keys.py
+accounts.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+*.vtt
+*.srt
+*.json3
+.pytest_cache/
+# HAR-дампы форумов: 90 МБ + содержат Cookie/сессии — только локально, в CI не нужны
+dump/
+*.har
+*_cookie.txt
