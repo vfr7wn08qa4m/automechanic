@@ -28,6 +28,9 @@ class ForumSite:
     next_page: str | None = None
     mode: str = "crawl"
     per_host_delay: float = 6.0      # сек между запросами к этому хосту
+    render_js: bool = False          # True -> тянуть через headless-браузер
+                                     # (Cloudflare JS-челлендж); зона запускается
+                                     # Playwright-джобой crawl-forums-js
 
 
 SITES: dict[str, ForumSite] = {
@@ -54,23 +57,30 @@ SITES: dict[str, ForumSite] = {
         mode="seed",
     ),
 
-    # --- ЗОНА B: EN ----------------------------------------------------------
+    # --- ЗОНА B: EN (доступ через Worker-реле CRAWL_PROXY) -------------------
+    "bimmerforums.com": ForumSite(
+        host="www.bimmerforums.com", engine="vbulletin", lang="en", zone="b",
+        # доступен ТОЛЬКО через Worker-реле (CRAWL_PROXY) — прямой доступ = 403 CF
+        seeds=["https://www.bimmerforums.com/forum/"],
+        thread_re=r"showthread\.php\?\d+",       # vBulletin: showthread.php?2386564-title
+        listing_re=r"forumdisplay\.php\?\d+",    # forumdisplay.php?12-e46
+        next_page=None,                          # пагинация vBulletin (page=N) — позже
+    ),
+
+    # --- ЗОНА D: EN за активным JS-челленджем Cloudflare (headless-браузер) ---
+    # Проверено: Playwright решает челлендж vwvortex (bobistheoilguy — Turnstile,
+    # жёстче; пробуем со stealth). Зону d крутит CI-джоба crawl-forums-js.
     "vwvortex.com": ForumSite(
-        host="www.vwvortex.com", engine="xenforo", lang="en", zone="b",
+        host="www.vwvortex.com", engine="xenforo", lang="en", zone="d", render_js=True,
         seeds=["https://www.vwvortex.com/forums/"],
         thread_re=r"/threads/[^\"#?]+\.\d+/?$",
         listing_re=r"/forums/[^\"#?]+\.\d+/?$",
         next_page="{base}page-{n}",     # XenForo: /forums/xxx.12/page-2
     ),
-    "bimmerforums.com": ForumSite(
-        host="www.bimmerforums.com", engine="vbulletin", lang="en", zone="b",
-        seeds=["https://www.bimmerforums.com/forum/"],
-        thread_re=r"/forum/[^\"#?]*\d+-[^\"#?]+",
-        listing_re=r"/forum/forumdisplay[^\"#?]*|/forum/[^\"#?]*forum[^\"#?]*",
-        next_page="{base}/page{n}",
-    ),
+    # bobistheoilguy — ОТКЛЮЧЁН (zone=off): Turnstile-челлендж, headless не берёт.
+    # Хочешь позже — stealth-докрутка или парс dump/bobistheoilguy.com.har.
     "bobistheoilguy.com": ForumSite(
-        host="bobistheoilguy.com", engine="xenforo", lang="en", zone="b",
+        host="bobistheoilguy.com", engine="xenforo", lang="en", zone="off", render_js=True,
         seeds=["https://bobistheoilguy.com/forums/"],
         thread_re=r"/threads/[^\"#?]+\.\d+/?$",
         listing_re=r"/forums/[^\"#?]+\.\d+/?$",

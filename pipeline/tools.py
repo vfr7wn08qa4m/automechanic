@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import argparse
+import html as _html
 import json
+import re as _re
 import sys
 from pathlib import Path
 
@@ -22,50 +24,77 @@ from .case_schema import RepairCase
 from .store import append_jsonl, archive_blob
 
 
+def _material_from_body(wi: dict) -> str:
+    """Материал (транскрипт видео / текст форум-треда) из ТЕЛА тикета: всё после
+    первого <hr>, без уже дописанного RepairCase. Единый источник и для видео,
+    и для форумов — Claude-агенту не нужно ничего до-фетчить."""
+    desc = (wi["fields"].get("System.Description", "") or "").split("<hr><b>RepairCase", 1)[0]
+    if "<hr>" in desc:
+        desc = desc.split("<hr>", 1)[1]      # отбрасываем метаданные до первого <hr>
+    txt = _html.unescape(_re.sub(r"<[^>]+>", " ", desc))
+    return _re.sub(r"\s+", " ", txt).strip()
+
+
+def _material_from_r2(vid: str) -> str:
+    """Фолбэк для старых видео-тикетов: транскрипт из R2-архива."""
+    try:
+        from .store import s3_client
+        from .subtitle_providers import lines_from_raw
+        from .subtitles import to_prompt_text
+        listed = s3_client().list_objects_v2(Bucket=config.S3_BUCKET, Prefix=f"subs/{vid}.")
+        for obj in listed.get("Contents", []):
+            key = obj["Key"]
+            raw = s3_client().get_object(Bucket=config.S3_BUCKET, Key=key)["Body"].read()
+            return to_prompt_text(lines_from_raw(key.rsplit(".", 1)[-1],
+                                                 raw.decode("utf-8", "replace")))
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
+
+
 def cmd_next_subs(batch: int, partition: str | None) -> None:
+    # Отдаём ТОЛЬКО метаданные (без транскрипта) — под-агент берёт материал сам через
+    # get-material. Так батч можно делать большим (100+), не переполняя контекст
+    # главного агента полными транскриптами (~18k симв на видео). Клейм — при
+    # get-material (claim-at-process), поэтому необработанные за прогон остаются в
+    # очереди для следующего (ничего не застревает «занятым»).
     ado = AdoClient()
     ids = ado.query_by_state("subs", top=batch, partition=partition)
     out = []
-    for wi_id in ids:
-        if not ado.claim(wi_id, "claude-cloud"):
-            continue
-        wi = ado.get(wi_id)
-        title = wi["fields"]["System.Title"]
+    for wi in ado.get_batch(ids, fields=("System.Title",)):
+        title = wi["fields"].get("System.Title", "")
         vid = ado.video_id_from_title(title) or ""
-        url = (AdoClient.source_url(wi)
-               or f"https://www.youtube.com/watch?v={vid}")
-        try:
-            # транскрипт: из R2-архива, иначе заново (роутер по источнику)
-            from .subtitle_providers import lines_from_raw, transcript_for_item
-            lang, lines = "", []
-            if config.S3_ENDPOINT:
-                from .store import s3_client
-                listed = s3_client().list_objects_v2(
-                    Bucket=config.S3_BUCKET, Prefix=f"subs/{vid}.")
-                for obj in listed.get("Contents", []):
-                    key = obj["Key"]
-                    parts = key.rsplit(".", 2)
-                    lang, ext = parts[-2], parts[-1]
-                    raw = s3_client().get_object(
-                        Bucket=config.S3_BUCKET, Key=key)["Body"].read()
-                    lines = lines_from_raw(ext, raw.decode("utf-8", errors="replace"))
-                    break
-            if not lines:
-                tr = transcript_for_item(url, vid)
-                lang, lines = tr.lang, tr.lines
-            from .subtitles import to_prompt_text
-            out.append({
-                "wi_id": wi_id, "video_id": vid,
-                "url": url,
-                "source_type": ("carcarekiosk" if "carcarekiosk.com" in url
-                                else "youtube"),
-                "title": title.split("]", 1)[-1].strip(),
-                "lang": lang,
-                "transcript": to_prompt_text(lines),
-            })
-        except Exception as e:  # noqa: BLE001
-            ado.set_state(wi_id, "failed", comment=f"transcript error: {e}")
+        stype = "forum" if vid.startswith("frm-") else "youtube"
+        out.append({"wi_id": wi["id"], "video_id": vid,
+                    "source_type": stype, "title": title.split("]", 1)[-1].strip()})
     json.dump(out, sys.stdout, ensure_ascii=False, indent=1)
+
+
+def cmd_get_material(wi_id: int) -> None:
+    """Материал ОДНОГО тикета (транскрипт видео / текст форум-треда) для под-агента.
+    Клеймит айтем (claim-at-process): занят -> skip; нет материала -> fail+пометка."""
+    ado = AdoClient()
+    if not ado.claim(wi_id, "claude-cloud"):
+        json.dump({"wi_id": wi_id, "skip": "занят другим воркером"},
+                  sys.stdout, ensure_ascii=False)
+        return
+    wi = ado.get(wi_id)
+    title = wi["fields"]["System.Title"]
+    vid = ado.video_id_from_title(title) or ""
+    url = (AdoClient.source_url(wi) or f"https://www.youtube.com/watch?v={vid}")
+    material = _material_from_body(wi)
+    if not material and config.S3_ENDPOINT and not vid.startswith("frm-"):
+        material = _material_from_r2(vid)
+    if not material:
+        ado.set_state(wi_id, "failed",
+                      comment="нет материала в теле тикета (subs-fetch/краул не отработал?)")
+        json.dump({"wi_id": wi_id, "no_material": True}, sys.stdout, ensure_ascii=False)
+        return
+    stype = ("forum" if vid.startswith("frm-")
+             else ("carcarekiosk" if "carcarekiosk.com" in url else "youtube"))
+    json.dump({"wi_id": wi_id, "video_id": vid, "url": url, "source_type": stype,
+               "title": title.split("]", 1)[-1].strip(), "lang": "", "transcript": material},
+              sys.stdout, ensure_ascii=False, indent=1)
 
 
 def cmd_save_case(wi_id: int, case_file: str) -> None:
@@ -76,6 +105,11 @@ def cmd_save_case(wi_id: int, case_file: str) -> None:
     vid = case.source.video_id or f"wi-{wi_id}"
     key = archive_blob(f"cases/{vid}.json", case.model_dump_json())
     ado = AdoClient()
+    # кейс -> НАЗАД В ТЕЛО ТИКЕТА (ADO = база, «материал/результат в воркайтем»)
+    import html as _h
+    ado.append_description(wi_id,
+        f"<hr><b>RepairCase</b> (system: {_h.escape(case.system or '')}, "
+        f"conf {case.confidence}) <pre>{_h.escape(case.model_dump_json())}</pre>")
     state = "distilled" if not case.off_topic else "offtopic"
     ado.set_state(wi_id, state,
                   comment=f"case: {case.system} | {case.problem_summary[:120]}",
@@ -112,8 +146,11 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p1 = sub.add_parser("next-subs")
-    p1.add_argument("--batch", type=int, default=5)
+    p1.add_argument("--batch", type=int, default=100)
     p1.add_argument("--partition", choices=["even", "odd"], default=None)
+
+    p5 = sub.add_parser("get-material")
+    p5.add_argument("wi_id", type=int)
 
     p2 = sub.add_parser("save-case")
     p2.add_argument("wi_id", type=int)
@@ -129,6 +166,8 @@ def main() -> None:
     args = ap.parse_args()
     if args.cmd == "next-subs":
         cmd_next_subs(args.batch, args.partition)
+    elif args.cmd == "get-material":
+        cmd_get_material(args.wi_id)
     elif args.cmd == "save-case":
         cmd_save_case(args.wi_id, args.case_file)
     elif args.cmd == "fail":

@@ -129,6 +129,35 @@ def discover_channels_api(query: str, limit: int = 10) -> list[dict]:
              "last_sync": None} for it in r.json().get("items", [])]
 
 
+def video_comments_api(video_id: str, max_comments: int = 60) -> list[dict]:
+    """Топ-комментарии видео через Data API (commentThreads, 1 unit/страница).
+    Часто золото: «у меня было то же, оказалось X». Пусто без YOUTUBE_API_KEY."""
+    if not config.YOUTUBE_API_KEY:
+        return []
+    out: list[dict] = []
+    page = None
+    while len(out) < max_comments:
+        r = requests.get(f"{YT_API}/commentThreads", params={
+            "key": config.YOUTUBE_API_KEY, "part": "snippet", "videoId": video_id,
+            "maxResults": min(100, max_comments - len(out)), "order": "relevance",
+            "textFormat": "plainText", **({"pageToken": page} if page else {})},
+            timeout=30)
+        if r.status_code != 200:       # комменты выключены / квота — не критично
+            break
+        body = r.json()
+        for it in body.get("items", []):
+            s = it["snippet"]["topLevelComment"]["snippet"]
+            txt = (s.get("textDisplay") or "").strip()
+            if len(txt) > 15:          # мусорные «спасибо» отсекаем
+                out.append({"author": s.get("authorDisplayName", ""),
+                            "text": txt, "likes": int(s.get("likeCount", 0) or 0)})
+        page = body.get("nextPageToken")
+        if not page:
+            break
+    out.sort(key=lambda c: c["likes"], reverse=True)   # по лайкам — сверху ценное
+    return out
+
+
 def channel_videos_api(channel_id: str, max_videos: int = 30) -> list[dict]:
     # uploads-плейлист = 'UU' + канал без 'UC' — 1 unit вместо search за 100
     uploads = "UU" + channel_id[2:]
@@ -171,9 +200,9 @@ def load_my_channels() -> list[str]:
         return []
     out = []
     for line in MY_CHANNELS_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            out.append(line)
+        code = line.split("#", 1)[0].strip()   # срезаем инлайн-коммент: "UCxxx # @handle"
+        if code:
+            out.append(code)
     return out
 
 

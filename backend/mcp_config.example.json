@@ -1,0 +1,17 @@
+{
+  "_readme": "Конфиг MCP-сервера AutoMech для Claude Desktop / Claude Code. Скопируй в claude_desktop_config.json (Windows: %APPDATA%\\Claude\\claude_desktop_config.json), заполни env из accounts.json.shared_secrets, перезапусти Claude. Затем спрашивай базу: 'найди кейсы по увалу CAS3+', 'consult BMW X3M вентилятор не крутит'.",
+  "mcpServers": {
+    "automech-repair": {
+      "command": "python",
+      "args": ["-m", "backend.mcp_server"],
+      "cwd": "C:\\aa\\automechanic",
+      "env": {
+        "QDRANT_URL": "<из accounts.json.shared_secrets.QDRANT_URL>",
+        "QDRANT_API_KEY": "<из accounts.json.shared_secrets.QDRANT_API_KEY>",
+        "QDRANT_COLLECTION": "cases",
+        "CF_ACCOUNT_ID": "<из accounts.json.cloudflare.account_id>",
+        "CF_API_TOKEN": "<AI-токен из accounts.json.shared_secrets.CF_API_TOKEN>"
+      }
+    }
+  }
+}

@@ -21,6 +21,9 @@ UCBRD2cT8xv6HSBspaPV9X7Q   # @Autoalyosha            Автоэлектрик А
 UCJhNBLXD4GPTx7aYvt2e6bA   # @garage_electrolife     Гараж Автоэлектрика Life
 UCTkhNoo7NxB66WcyLMH_1qA   # @putautoelektrika       Путь Автоэлектрика
 UCC492BS_DUo3ScrXgUPJDew   # @parenszavoda3529       Paren s ZAVODA
+UChWopg8_d-xGLPHRxkY6cXg   # @pitermega              Автоэлектрик Питермега
+UCgL4RnF4g8dhMy_AXfZl6CQ   # @akautorepair           AK Auto Repair Автоэлектрик Диагност
+UCbaY9uQU13qvAK-d3edhbtQ   # @duganovvv              Эльмурат Автоэлектрик
 
 # --- EN автоэлектрики/диагносты ---
 UCk_lcDzEWLs5fVRYceK3-9Q   # @ElectricalCarRepairLIVE  Electrical Car Repair LIVE
@@ -38,3 +41,19 @@ UC2gRQKQgI3CsrcnMuHPyYsQ   # @HumbleMechanic         HumbleMechanic
 UCHl8nHPqf-uc9EHiza5r4hw   # @AutomotiveDiagnosis    Automotive Diagnosis
 UCoKjAu8tbtGC55m-2Sb5_NA   # @BuddysDIY              Buddy's DIY
 UCes1EvRjcKU4sY_UEavndBw   # @chrisfix               ChrisFix
+
+# --- Ремонт ЭБУ / прошивка / ключи / чип-тюнинг (2026-07-12) ---
+UCxfE8FoAWBrZfO9SvZPH0yw   # @ecurepair                   Keyworks ECU Repair — board-level ремонт плат ЭБУ, immo off
+UChyL9NXrRlvszsvtENO8wTw   # @Auto-Electrican-Diagnostic  Автоэлектрик-Диагност — прошивка EDC16/17, ME7, immo
+UC6_IjfLwmIl1Th1gUwjAvTA   # @theautomotiveclinic3582     The Automotive Clinic — ремонт DME/BSI, тюнинг
+UCcskVm_7IfZ0bmFcrliz7Fg   # @bobrov_ilya                 Илья Бобров — обучение ремонту ЭБУ + ключи
+UCyUCPBKsAbC_9tALU7ElXbg   # @Filat-Ogorodnikov           Filat Ogorodnikov — чип-тюнинг/BSL, не валить блоки
+UCNZty_jKwN_LJ6oNBcDlWig   # @PineHollowAutoDiagnostics   Pine Hollow — диагностика+ремонт модулей, осциллограф
+UCrf6f8hn5oy4alB2WXJCIqA   # @ScannerDanner               ScannerDanner — методика электродиагностики
+UC28SNQjNxcUYwOXDJL5umjQ   # @AutomotiveElectronics       Automotive Electronics — ремонт приборных щитков
+UCAGOf-OwWyLkvn8oxKUOMnw   # СтасИсаков                   Стас Исаков — ключи, эмуляторы иммо, ремонт ЭБУ
+UCph6TDDg6RLeb6WJwvZ6Q-A   # @locksmithingsecrets         Locksmithing Secrets — программирование ключей
+UCKpLp0QDbwF0r5e5QIyzazA   # @MODS-Chiptuning             MODS Chiptuning — чип-тюнинг, дизель EGR/DPF
+UC6zNvEw68qz_4W-pD7xlOOw   # @ECU_tech_team_RU            ECU TECH Team — прошивка ЭБУ грузовиков
+UCTE31evc7ScgE-xEv7qShtw   # @znaniebel2277               znanie bel — прошивка BSL, реанимация блоков
+UCpBwuRpjwOIrNKycwDthHeA   # @ECUDoctorsUSA               ECU Doctors — восстановленные ЭБУ/DME, immo

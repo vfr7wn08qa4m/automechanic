@@ -1,121 +1,57 @@
-# CircleCI: ВСЕ этапы в облаке, домашняя машина не нужна (только мониторинг).
+# CircleCI: единый ТИК кольца. Каждый прогон = ОДИН рандомный шаг конвейера
+# (subs/embed/delta/discover/forums) ЛИБО дневной бэкап, затем эстафета следующему
+# аккаунту (pipeline/ci_trigger.ring_handoff). Ни расписаний, ни отдельных flow —
+# вся оркестрация внутри кольца. Дистилляцию (subs -> RepairCase) делает облачный
+# Claude-агент, не CI.
 #
-# Титры добываются цепочкой провайдеров (pipeline/subtitle_providers.py):
-# yt-dlp (сдохнет на DC IP — не страшно) -> Invidious-зеркала -> Supadata API;
-# для yt-dlp в CI можно задать YTDLP_PROXY (residential-прокси).
-# Дистилляция и индексация — чистые API-вызовы, DC IP не мешает.
+# Кольцо кикается ОДИН раз (deploy.py --trigger, после замыкания всех аккаунтов) и
+# крутится, пока есть работа; встаёт, когда полный круг проходит вхолостую (RING_IDLE)
+# или упирается в месячный бюджет минут (ci_budget.guard).
 #
-# ПАРНЫЕ АККАУНТЫ (удвоение бесплатного тира):
-#   аккаунт A: scheduled pipeline в чётные минуты (напр. "0,10,20,..."),
-#              параметр partition=even
-#   аккаунт B: нечётные минуты ("5,15,25,..."), partition=odd
-# Партиция делит work items по чётности id + каждый айтем клеймится атомарно
-# (rev-test в ADO) — оба аккаунта работают по одной очереди без гонок.
-#
-# Секреты: Organization Settings -> Contexts -> контекст "automech"
-# (см. docs/circleci-setup.md): ADO_ORG, ADO_PROJECT, ADO_PAT, DISTILL_API_KEY,
-# S3_*, QDRANT_*, SUPADATA_API_KEY, YTDLP_PROXY, EMBED_REMOTE_URL...
-#
-# Расписание: App -> Project Settings -> Triggers -> Scheduled Trigger,
-# параметр pipeline.partition задаётся в форме триггера.
+# Секреты: Organization Settings -> Contexts -> 'automech' (льёт deploy.py --context):
+# ADO_*, DISTILL_*, S3_*, QDRANT_*, SUPADATA_API_KEY, YTDLP_PROXY, CRAWL_PROXY*,
+# YOUTUBE_API_KEY, BACKUP_REPO/BACKUP_GITHUB_TOKEN, NEXT_CIRCLECI_* + RING_SIZE (кольцо).
 
 version: 2.1
 
 parameters:
-  partition:
-    type: enum
-    enum: ["even", "odd", "solo"]
-    default: "solo"
   batch-size:
     type: integer
     default: 10
-  crawl-zone:
+  partition:
     type: string
-    default: "a"        # a=RU (carmasters,drive2) b=EN c=прочие — см. forum_sites.py
+    default: "solo"        # в кольце партиции не используются (один аккаунт за тик)
+  ring-idle:
+    type: integer
+    default: 0             # эстафетный счётчик холостых тиков (см. pipeline/ci_trigger)
   flow:
-    type: enum
-    enum: ["conveyor", "crawl"]
-    default: "conveyor"   # какой воркфлоу запускает этот триггер
-
-executors:
-  py:
-    docker:
-      - image: cimg/python:3.12
-    resource_class: small
+    type: string
+    default: "tick"        # исторический параметр триггера; в кольце игнорируется
 
 jobs:
-  crawl-forums:
-    executor: py
+  tick:
+    docker:
+      - image: cimg/python:3.12
+    resource_class: medium          # subs (tubetranscript) и forums-js поднимают Chromium
+    environment:
+      RING_IDLE: "<< pipeline.parameters.ring-idle >>"   # входящий idle кольца -> ci_trigger
     steps:
       - checkout
-      - run: pip install -q -r requirements.txt
       - run:
-          name: краул форумов зоны -> посты в R2 -> тикеты ADO (state:subs)
-          no_output_timeout: 22m
+          name: зависимости + Chromium (tubetranscript / forums-js)
           command: |
-            python scripts/ci_crawl.py --zone << pipeline.parameters.crawl-zone >> --minutes 18
-
-  fetch-subtitles:
-    executor: py
-    steps:
-      - checkout
-      - run: pip install -q "yt-dlp[default,curl-cffi]" -r requirements.txt
+            pip install -q "yt-dlp[default,curl-cffi]" playwright -r requirements.txt
+            python -m playwright install --with-deps chromium
       - run:
-          name: state:new -> transcript -> R2 -> state:subs
-          no_output_timeout: 30m
+          name: один рандомный тик конвейера -> эстафета следующему аккаунту
+          no_output_timeout: 40m
           command: |
-            python scripts/ci_fetch_subs.py \
+            python scripts/ci_tick.py \
               --batch << pipeline.parameters.batch-size >> \
-              --partition << pipeline.parameters.partition >>
-
-  distill:
-    executor: py
-    steps:
-      - checkout
-      - run: pip install -q -r requirements.txt
-      - run:
-          name: state:subs -> LLM case -> R2 -> state:distilled
-          no_output_timeout: 45m
-          command: |
-            python scripts/local_distill_batch.py \
-              --batch << pipeline.parameters.batch-size >> \
-              --partition << pipeline.parameters.partition >>
-
-  embed-index:
-    executor: py
-    steps:
-      - checkout
-      - run: pip install -q -r requirements.txt
-      - run:
-          name: state:distilled -> bge-m3 -> Qdrant -> state:indexed
-          command: |
-            python scripts/embed_index_batch.py --batch 50 \
               --partition << pipeline.parameters.partition >>
 
 workflows:
-  # Основной конвейер (титры/дистилляция/индекс). Форумы наполняют state:subs
-  # напрямую краулером, поэтому distill их подхватывает наравне с видео.
-  conveyor:
-    when:
-      equal: ["conveyor", << pipeline.parameters.flow >>]
+  ring:
     jobs:
-      - fetch-subtitles:
-          context: automech
-      - distill:
-          context: automech
-          requires: [fetch-subtitles]
-      - embed-index:
-          context: automech
-          requires: [distill]
-
-  # Краул форумов — отдельный воркфлоу, дёргается своим scheduled trigger'ом.
-  # Зона задаётся параметром crawl-zone в форме триггера:
-  #   аккаунт A, чётные часы  -> crawl-zone=a (RU: carmasters, drive2)
-  #   аккаунт B, нечётные часы -> crawl-zone=b (EN: vwvortex, bimmerforums, bobistheoilguy)
-  # Разные зоны = разные хосты в разное время: один IP не молотит один форум.
-  crawl:
-    when:
-      equal: ["crawl", << pipeline.parameters.flow >>]
-    jobs:
-      - crawl-forums:
+      - tick:
           context: automech

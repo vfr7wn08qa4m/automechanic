@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import argparse
+import html as _html
 import json
+import re as _re
 import sys
 from pathlib import Path
 
@@ -18,6 +20,19 @@ from pipeline.ado import AdoClient                   # noqa: E402
 from pipeline.case_schema import RepairCase          # noqa: E402
 from pipeline.embed import embed                     # noqa: E402
 from pipeline.store import CASES_JSONL, qdrant_upsert, s3_client  # noqa: E402
+
+
+def _case_from_body(wi: dict) -> RepairCase | None:
+    """Кейс из ТЕЛА тикета (save-case кладёт RepairCase-JSON в <pre> после
+    маркера). Это основной источник: облачный Claude-агент пишет только сюда."""
+    desc = wi.get("fields", {}).get("System.Description", "") or ""
+    m = _re.search(r"RepairCase.*?<pre>(.*?)</pre>", desc, _re.S)
+    if not m:
+        return None
+    try:
+        return RepairCase.model_validate_json(_html.unescape(m.group(1)))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def load_case(vid: str) -> RepairCase | None:
@@ -36,6 +51,36 @@ def load_case(vid: str) -> RepairCase | None:
     return None
 
 
+def embed_batch(ado, batch: int = 50, partition: str | None = None) -> int:
+    """Разобрать батч state:distilled -> вектор -> Qdrant -> state:indexed.
+    Возвращает число проиндексированных (для idle-halt кольца)."""
+    ids = ado.query_by_state("distilled", top=batch, partition=partition)
+    print(f"work items в state:distilled: {len(ids)}")
+
+    done = 0
+    for wi_id in ids:
+        if not ado.claim(wi_id, f"embed-{partition or 'solo'}"):
+            continue
+        wi = ado.get(wi_id)
+        vid = ado.video_id_from_title(wi["fields"]["System.Title"]) or ""
+        case = _case_from_body(wi) or load_case(vid)   # тело тикета -> фолбэк S3/jsonl
+        if case is None:
+            ado.set_state(wi_id, "failed", comment="case json not found")
+            continue
+        try:
+            vec = embed([case.search_text()])[0]
+            qdrant_upsert(case, vec)
+            ado.set_state(wi_id, "indexed")
+            done += 1
+            print(f"  #{wi_id} {vid}: indexed")
+        except Exception as e:  # noqa: BLE001
+            ado.set_state(wi_id, "failed", comment=f"embed error: {e}")
+            print(f"  #{wi_id} {vid}: FAIL {e}")
+
+    print(f"итог: проиндексировано {done}/{len(ids)}")
+    return done
+
+
 def main() -> None:
     import os
     ap = argparse.ArgumentParser()
@@ -47,30 +92,16 @@ def main() -> None:
         args.partition = None
 
     from pipeline.ci_budget import guard
-    if not guard(10):     # месячный лимит минут исчерпан -> тихий выход
+    from pipeline.ci_trigger import ring_handoff
+    if not guard(10):     # лимит исчерпан -> пропуск тика, эстафету передаём дальше
+        ring_handoff("index", worked=False,
+                     partition=args.partition or "solo", batch=args.batch)
         return
 
     ado = AdoClient()
-    ids = ado.query_by_state("distilled", top=args.batch, partition=args.partition)
-    print(f"work items в state:distilled: {len(ids)}")
-
-    for wi_id in ids:
-        if not ado.claim(wi_id, f"embed-{args.partition or 'solo'}"):
-            continue
-        wi = ado.get(wi_id)
-        vid = ado.video_id_from_title(wi["fields"]["System.Title"]) or ""
-        case = load_case(vid)
-        if case is None:
-            ado.set_state(wi_id, "failed", comment="case json not found")
-            continue
-        try:
-            vec = embed([case.search_text()])[0]
-            qdrant_upsert(case, vec)
-            ado.set_state(wi_id, "indexed")
-            print(f"  #{wi_id} {vid}: indexed")
-        except Exception as e:  # noqa: BLE001
-            ado.set_state(wi_id, "failed", comment=f"embed error: {e}")
-            print(f"  #{wi_id} {vid}: FAIL {e}")
+    done = embed_batch(ado, args.batch, args.partition)
+    ring_handoff("index", worked=bool(done),
+                 partition=args.partition or "solo", batch=args.batch)
 
 
 if __name__ == "__main__":

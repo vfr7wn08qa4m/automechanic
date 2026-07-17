@@ -1,0 +1,7 @@
+# Зависимости MCP-сервера AutoMech (backend/mcp_server.py). Ставится отдельно —
+# CI-пайплайну не нужно.  pip install -r backend/requirements-mcp.txt
+mcp>=1.2
+requests>=2.32
+openai>=1.40        # transitively: pipeline.embed использует openai-клиент для NIM (опц.)
+pydantic>=2.7
+python-dotenv>=1.0

@@ -1,7 +1,10 @@
 """Схема «кейса ремонта» — главный продуктовый артефакт.
 
-Один кейс = одна проблема из видео/треда форума: что случилось, как искали,
-что намерили, в чём была причина, как починили, какие грабли попались.
+Один кейс = главная проблема из видео/треда форума ПЛЮС всё попутное знание,
+что мастер роняет по ходу (правила, наблюдения, значения, советы, кросс-
+модельные факты) — не только основная линия. Что случилось, как искали, что
+намерили, причина, как починили, грабли — и КАЖДЫЙ полезный факт вскользь
+(поля rules/pitfalls/measurements/notes для этого и есть, не суммируй — извлекай).
 """
 from __future__ import annotations
 
@@ -121,6 +124,10 @@ class RepairCase(BaseModel):
     tools: list[str] = []
     pitfalls: list[Pitfall] = []      # нюансы: «не перепутай, там два одинаковых разъёма»
     rules: list[DiagnosticRule] = []  # костяк «если→то» из этого видео (см. DiagnosticRule)
+    notes: list[str] = []             # ВСЁ попутное полезное, не влезшее в поля выше:
+                                      # советы, наблюдения, кросс-модельные факты,
+                                      # предупреждения, приёмы, значения — дословно,
+                                      # даже если вскользь и не про основную проблему
 
     lang: str = ""                    # язык исходника
     summary_en: str = ""              # каноническое резюме на английском (для кросс-языка)
@@ -144,6 +151,7 @@ class RepairCase(BaseModel):
             self.applicability_note,
             "; ".join(p.text for p in self.pitfalls),
             "; ".join(f"{r.parameter} {r.condition} → {r.conclusion}" for r in self.rules),
+            "; ".join(self.notes),
             self.summary_en,
         ]
         return "\n".join(p for p in parts if p)
@@ -179,6 +187,7 @@ CASE_JSON_TEMPLATE = """{
   "tools": [""],
   "pitfalls": [{"text": "", "scope": "model|make|engine_type|universal", "timestamp_sec": 0}],
   "rules": [{"parameter": "", "condition": "", "op": "<=|<|>=|>|~|=|!=", "value": 0, "unit": "", "conclusion": "", "kind": "normal_baseline|fault|procedure|caveat", "scope": "model|make|engine_type|universal", "confidence": 0.0, "caveat": "", "timestamp_sec": 0}],
+  "notes": ["любой полезный факт/совет/наблюдение по ходу, дословно"],
   "lang": "",
   "summary_en": "",
   "off_topic": false,

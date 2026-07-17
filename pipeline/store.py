@@ -60,6 +60,23 @@ def _qdrant_headers() -> dict:
     return h
 
 
+# payload-индексы под фильтры поиска (без индекса Qdrant возвращает 400 на match).
+# make/model/system — full-text (match:text); остальные — keyword (match:any).
+_QDRANT_INDEXES = (("make", "text"), ("model", "text"), ("system", "text"),
+                   ("lang", "keyword"), ("applicability", "keyword"),
+                   ("dtc_codes", "keyword"))
+
+
+def qdrant_ensure_indexes() -> None:
+    url = f"{config.QDRANT_URL}/collections/{config.QDRANT_COLLECTION}"
+    for field, schema in _QDRANT_INDEXES:
+        try:
+            requests.put(f"{url}/index?wait=true", headers=_qdrant_headers(),
+                         timeout=30, json={"field_name": field, "field_schema": schema})
+        except Exception:  # noqa: BLE001 — индекс уже есть / поле пустое
+            pass
+
+
 def qdrant_ensure_collection() -> None:
     url = f"{config.QDRANT_URL}/collections/{config.QDRANT_COLLECTION}"
     r = requests.get(url, headers=_qdrant_headers(), timeout=30)
@@ -68,6 +85,7 @@ def qdrant_ensure_collection() -> None:
     requests.put(url, headers=_qdrant_headers(), timeout=30, json={
         "vectors": {"size": config.EMBED_DIM, "distance": "Cosine"},
     }).raise_for_status()
+    qdrant_ensure_indexes()
 
 
 def qdrant_upsert(case: RepairCase, vector: list[float]) -> None:

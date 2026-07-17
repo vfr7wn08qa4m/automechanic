@@ -24,7 +24,10 @@ def main() -> None:
     ap.add_argument("--minutes", type=float, default=18.0)
     ap.add_argument("--max-threads", type=int, default=None)
     args = ap.parse_args()
-    if not guard(args.minutes + 2):   # +2 на setup; месячный лимит исчерпан -> выход 0
+    if not guard(args.minutes + 2):   # +2 на setup; месячный лимит исчерпан -> пропуск
+        from pipeline.ci_trigger import ring_handoff   # тика, но эстафету передаём дальше
+        ring_handoff("crawl-js" if args.zone == "d" else "crawl",
+                     worked=False, zone=args.zone)
         return
     import time
     t0 = time.monotonic()
@@ -32,7 +35,23 @@ def main() -> None:
         crawl(args.zone, args.minutes, create_workitems=True,
               max_threads=args.max_threads, har=None)
     finally:
-        record((time.monotonic() - t0) / 60 - (args.minutes + 2))  # факт − резерв
+        elapsed = (time.monotonic() - t0) / 60
+        record(elapsed - (args.minutes + 2))  # факт − резерв
+
+    # эстафета краула зоны следующему аккаунту в кольце: worked=таймбокс реально
+    # отработал (фронтир не пуст). Пустой тик -> idle+1, эстафета всё равно уходит
+    # дальше. Бюджет-throttle тут не нужен: у следующего аккаунта свой бюджет, а
+    # guard() на старте каждого прогона сам тормозит исчерпанный аккаунт.
+    from pipeline.ci_trigger import ring_handoff
+    worked_full = elapsed >= args.minutes * 0.6
+    ring_handoff("crawl-js" if args.zone == "d" else "crawl",
+                 worked=worked_full, zone=args.zone)
+
+    # авто-индексация отдельным лейном: Claude накопил distilled -> пинок index
+    # следующему аккаунту (embed-index сам разгребёт бэклог -> Closed + поиск).
+    from pipeline.ado import AdoClient
+    if len(AdoClient().query_by_state("distilled", top=3)) >= 3:
+        ring_handoff("index", worked=True, batch=20)
 
 
 if __name__ == "__main__":

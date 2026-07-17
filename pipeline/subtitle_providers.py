@@ -47,6 +47,10 @@ INVIDIOUS_INSTANCES = [i.strip() for i in os.getenv(
 
 SUPADATA_API_KEY = os.getenv("SUPADATA_API_KEY", "")
 
+# страховка от обрезанных транскриптов: меньше этого числа строк = провайдер
+# недотянул (интро/огрызок) -> роутер пробует следующий провайдер.
+_MIN_TRANSCRIPT_LINES = int(os.getenv("TRANSCRIPT_MIN_LINES", "3"))
+
 
 def _langs_priority() -> list[str]:
     return [l.strip() for l in config.SUB_LANGS if l.strip()]
@@ -110,6 +114,132 @@ def _via_invidious(video_id: str) -> TranscriptResult:
     raise RuntimeError(f"invidious failed: {last_err}")
 
 
+# --- 4. tubetranscript (через Playwright) ---------------------------------------
+# Сторонний сервис сам тянет YouTube на СВОЁЙ стороне -> облачный DC-IP не мешает.
+# Без токена (nginx, не Cloudflare); JS рендерит транскрипт -> ведём браузером.
+_TT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+_TT_PW: dict = {"pw": None, "browser": None, "ctx": None}
+
+
+def _tt_ctx():
+    if _TT_PW["ctx"] is None:
+        from playwright.sync_api import sync_playwright
+        _TT_PW["pw"] = sync_playwright().start()
+        _TT_PW["browser"] = _TT_PW["pw"].chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+        _TT_PW["ctx"] = _TT_PW["browser"].new_context(user_agent=_TT_UA, locale="en-US")
+    return _TT_PW["ctx"]
+
+
+def close_tubetranscript() -> None:
+    if _TT_PW["ctx"] is not None:
+        try:
+            _TT_PW["browser"].close()
+            _TT_PW["pw"].stop()
+        except Exception:  # noqa: BLE001
+            pass
+        _TT_PW.update(pw=None, browser=None, ctx=None)
+
+
+def _via_tubetranscript(video_id: str) -> TranscriptResult:
+    # Фронт tubetranscript дёргает свой transcript-API (yt-to-text.com/api/v1/Subtitles)
+    # -> ПЕРЕХВАТЫВАЕМ его ответ = ПОЛНЫЙ транскрипт с таймкодами, минуя DOM. Старый
+    # путь читал .transcript-text из ВИРТУАЛИЗОВАННОГО списка -> в DOM только ~2
+    # видимых сегмента -> обрезка «2 строки» (баг, из-за которого падала дистилляция).
+    page = _tt_ctx().new_page()
+    captured: dict = {}
+
+    def _on_resp(resp):
+        if "yt-to-text.com/api/v1/Subtitles" in resp.url and resp.status == 200:
+            try:
+                captured["data"] = resp.json()
+            except Exception:  # noqa: BLE001
+                pass
+
+    page.on("response", _on_resp)
+    try:
+        page.goto(f"https://tubetranscript.com/en/watch?v={video_id}",
+                  wait_until="domcontentloaded", timeout=45000)
+        trs = None
+        for _ in range(40):                    # ждём, пока фронт получит транскрипт
+            d = captured.get("data")
+            trs = ((d or {}).get("data") or {}).get("transcripts")
+            if trs:
+                break
+            page.wait_for_timeout(1000)
+        if not trs:
+            raise RuntimeError("tubetranscript: API yt-to-text не отдал transcripts")
+        lines = [(int(float(t.get("s") or 0)), (t.get("t") or "").strip())
+                 for t in trs if (t.get("t") or "").strip()]
+        if not lines:
+            raise RuntimeError("tubetranscript: пустой транскрипт (API)")
+        raw = json.dumps(
+            {"content": [{"offset": int(float(t.get("s") or 0) * 1000),
+                          "text": t.get("t") or ""} for t in trs]},
+            ensure_ascii=False)
+        return TranscriptResult(lang="", lines=lines, raw=raw, raw_ext="json",
+                                provider="tubetranscript")
+    finally:
+        page.close()
+
+
+# --- 5. youtube-transcript.io (через Playwright, перехват JSON-API) --------------
+# Чистый JSON: POST /api/transcripts/v2 {"ids":[id]} -> success[0].tracks[0].
+# transcript = [{start,dur,text}] с таймкодами. Сервис сам тянет YouTube ->
+# облачный DC-IP не мешает. Нужен их анти-бот заголовок x-is-human (генерит их
+# же JS) -> ведём страницу тем же headless-браузером и перехватываем ответ API.
+def _via_yttio(video_id: str) -> TranscriptResult:
+    page = _tt_ctx().new_page()
+    captured: dict = {}
+
+    def _on_resp(resp):
+        if "/api/transcripts/v2" in resp.url and resp.status == 200:
+            try:
+                captured["data"] = resp.json()
+            except Exception:  # noqa: BLE001
+                pass
+    page.on("response", _on_resp)
+    try:
+        page.goto(f"https://www.youtube-transcript.io/videos?id={video_id}",
+                  wait_until="domcontentloaded", timeout=45000)
+        for _ in range(40):                 # ждём, пока их JS дёрнет api (x-is-human)
+            if captured.get("data"):
+                break
+            page.wait_for_timeout(1000)
+        data = captured.get("data")
+        if not data:
+            raise RuntimeError("yttio: ответ api/transcripts не перехвачен")
+        succ = data.get("success") or []
+        if not succ:
+            raise RuntimeError("yttio: success пуст (видео недоступно/без титров)")
+        item = succ[0]
+        tracks = item.get("tracks") or []
+        segs = (tracks[0].get("transcript") if tracks else None) or []
+        lines: list[tuple[int, str]] = []
+        for s in segs:
+            t = (s.get("text") or "").strip()
+            if not t:
+                continue                    # часто \n-заглушки между строками
+            try:
+                sec = int(float(s.get("start", 0)))
+            except (TypeError, ValueError):
+                sec = 0
+            lines.append((sec, t))
+        if not lines and (item.get("text") or "").strip():
+            lines = [(0, item["text"].strip())]     # фолбэк: сплошной текст
+        if not lines:
+            raise RuntimeError("yttio: пустой транскрипт")
+        lang = ((tracks[0].get("language") if tracks else "") or "")[:2]
+        raw = json.dumps({"lang": lang,
+                          "content": [{"offset": sec * 1000, "text": t}
+                                      for sec, t in lines]}, ensure_ascii=False)
+        return TranscriptResult(lang=lang, lines=lines, raw=raw,
+                                raw_ext="json", provider="yttio")
+    finally:
+        page.close()
+
+
 # --- 3. Supadata -----------------------------------------------------------------
 
 def _via_supadata(video_id: str) -> TranscriptResult:
@@ -133,7 +263,8 @@ def _via_supadata(video_id: str) -> TranscriptResult:
 
 
 _PROVIDERS = {"ytdlp": _via_ytdlp, "invidious": _via_invidious,
-              "supadata": _via_supadata}
+              "supadata": _via_supadata, "tubetranscript": _via_tubetranscript,
+              "yttio": _via_yttio}
 
 
 def lines_from_raw(raw_ext: str, raw: str) -> list[tuple[int, str]]:
@@ -176,10 +307,12 @@ def get_transcript(video_id: str) -> TranscriptResult:
             continue
         try:
             res = fn(video_id)
-            if res.lines:
+            # страховка от обрезки: реальный кейс-транскрипт — это десятки+ строк.
+            # 1-2 строки = провайдер недотянул (напр. отдал интро) -> следующий.
+            if res.lines and len(res.lines) >= _MIN_TRANSCRIPT_LINES:
                 res.errors = errors
                 return res
-            errors.append(f"{name}: empty")
+            errors.append(f"{name}: короткий/пустой ({len(res.lines)} строк)")
         except Exception as e:  # noqa: BLE001
             errors.append(f"{name}: {str(e)[:160]}")
     raise RuntimeError(f"транскрипт не добыт ({video_id}): " + " | ".join(errors))

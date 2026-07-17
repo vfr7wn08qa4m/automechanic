@@ -17,10 +17,37 @@ from pathlib import Path
 from . import config
 
 
+_COOKIE_FILE: str | None = None
+
+
+def _cookies_path() -> str | None:
+    """Материализует cookies YouTube-сессии из YTDLP_COOKIES_B64 в temp-файл
+    (один раз). Позволяет облачному yt-dlp пройти блок датацентрового IP."""
+    global _COOKIE_FILE
+    if _COOKIE_FILE is not None:
+        return _COOKIE_FILE or None
+    if not config.YTDLP_COOKIES_B64:
+        _COOKIE_FILE = ""
+        return None
+    import base64
+    fd, path = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
+    import os
+    os.write(fd, base64.b64decode(config.YTDLP_COOKIES_B64))
+    os.close(fd)
+    _COOKIE_FILE = path
+    return path
+
+
 def _run_ytdlp(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
     cmd = ["yt-dlp", "--no-update", "--no-warnings"]
     if config.YTDLP_PROXY:
         cmd += ["--proxy", config.YTDLP_PROXY]
+    cookies = _cookies_path()
+    if cookies:
+        cmd += ["--cookies", cookies]
+    if config.YTDLP_VISITOR_DATA:      # PO/визитор из HAR -> extractor-args
+        cmd += ["--extractor-args",
+                f"youtube:player_client=web,default;visitor_data={config.YTDLP_VISITOR_DATA}"]
     cmd += args
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=timeout)

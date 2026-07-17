@@ -202,7 +202,7 @@ class AdoClient:
         if video["id"] in known:
             return None
         shard = self.current_channel_shard(channel, kind)
-        wi = self.create_video_item(video, parent_id=shard)
+        wi = self.create_video_item(video, parent_id=shard, skip_dedup=True)
         if wi:
             known.add(video["id"])
         return wi
@@ -252,30 +252,45 @@ class AdoClient:
     def find_video_item(self, video_id: str) -> int | None:
         return self._find_marker(f"vid:{video_id}")
 
-    def create_video_item(self, video: dict, parent_id: int | None = None) -> int | None:
+    def create_video_item(self, video: dict, parent_id: int | None = None,
+                          body_html: str = "", skip_dedup: bool = False) -> int | None:
         """video: {id, title, url, channel, channel_id, published_at, duration}.
         Task в state New (default) с Custom.url = ссылка на источник.
-        parent_id — Epic-чанк канала. None если такое видео уже есть (дедуп)."""
-        if self.find_video_item(video["id"]):
+        body_html — сырой материал (текст постов форума) прямо в тело тикета:
+        ADO = база, «материал уходит в тикет» (форумам так не нужен R2).
+        parent_id — Epic-чанк канала. None если такое видео уже есть (дедуп).
+        skip_dedup — пропустить WIQL-проверку (вызывающий уже дедупит по known)."""
+        if not skip_dedup and self.find_video_item(video["id"]):
             return None
         title = f"[vid:{video['id']}] {video.get('title', '')[:180]}"
         desc = "<br>".join(
             f"{k}: {video.get(k, '')}" for k in
             ("url", "channel", "channel_id", "published_at", "duration"))
+        if body_html:
+            desc += "<hr>" + body_html
         ops = [
             {"op": "add", "path": "/fields/System.Title", "value": title},
             {"op": "add", "path": "/fields/System.Description", "value": desc},
             {"op": "add", "path": "/fields/System.Tags", "value": "auto-mech"},
         ]
-        if video.get("url"):     # поле ссылки — для дедупа/дельта-поиска
+        u = video.get("url", "")
+        if u and len(u) <= 255:  # ADO string-поле = 255; длинные форум-URL с %-кириллицей
             ops.append({"op": "add", "path": f"/fields/{config.ADO_URL_FIELD}",
-                        "value": video["url"]})
+                        "value": u})   # полный URL всегда есть в Description (url:/источник)
         if parent_id:
             ops.append({"op": "add", "path": "/relations/-", "value": {
                 "rel": "System.LinkTypes.Hierarchy-Reverse",
                 "url": f"https://dev.azure.com/{self.org}/_apis/wit/workItems/{parent_id}",
             }})
         return self._create(config.ADO_WORKITEM_TYPE, ops)
+
+    def append_description(self, wi_id: int, html_block: str) -> None:
+        """Дописать HTML-блок в тело тикета — результат процессинга возвращается
+        В САМ воркайтем (кейс ремонта рядом с исходным материалом)."""
+        wi = self.get(wi_id)
+        cur = wi["fields"].get("System.Description", "") or ""
+        self._patch(wi_id, [{"op": "add", "path": "/fields/System.Description",
+                             "value": cur + html_block}])
 
     def exists_url(self, url: str) -> int | None:
         """Дельта-поиск: есть ли уже Task с такой Custom.url. Возвращает id или None."""
@@ -338,6 +353,32 @@ class AdoClient:
                 out.append({"account": acc, "month": month,
                             "minutes": float(wi["fields"].get(config.ADO_BUDGET_FIELD, 0) or 0)})
         return out
+
+    # --- стейт краула (frontier/seen) в ADO: облачные прогоны идут вглубь -------
+    def crawl_state_item(self, zone: str, create: bool = True) -> int | None:
+        """Work item-хранилище стейта краула зоны (тип Feature, gzip+base64 в
+        Description). Позволяет эфемерным CI-агентам продолжать обход вглубь."""
+        marker = f"automech-crawl:{zone}"
+        wid = self._find_marker(f"[{marker}]")
+        if wid or not create:
+            return wid
+        ops = [
+            {"op": "add", "path": "/fields/System.Title",
+             "value": f"[{marker}] crawl frontier zone {zone}"},
+            {"op": "add", "path": "/fields/System.Tags", "value": "automech-crawl"},
+        ]
+        return self._create(config.ADO_BUDGET_TYPE, ops)
+
+    def crawl_state_read(self, zone: str) -> str:
+        wid = self.crawl_state_item(zone, create=False)
+        if not wid:
+            return ""
+        return self.get(wid)["fields"].get("System.Description", "") or ""
+
+    def crawl_state_write(self, zone: str, blob_b64: str) -> None:
+        wid = self.crawl_state_item(zone, create=True)
+        self._patch(wid, [{"op": "add", "path": "/fields/System.Description",
+                           "value": blob_b64}])
 
     def claim(self, wi_id: int, worker: str) -> bool:
         """Атомарно застолбить work item за воркером (оптимистичная блокировка

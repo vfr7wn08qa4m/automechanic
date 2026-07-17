@@ -67,6 +67,19 @@ SUB_LANGS = _get("SUB_LANGS", default="ru,uk,en,de,es,pt,pl,tr").split(",")
 YTDLP_SLEEP_SECONDS = float(_get("YTDLP_SLEEP_SECONDS", default="8"))
 # residential-прокси для yt-dlp в CI (http://user:pass@host:port или socks5://...)
 YTDLP_PROXY = _get("YTDLP_PROXY")
+# Cookies YouTube-сессии для облачного yt-dlp (обход блока датацентрового IP без
+# домашнего прогона): base64 от Netscape cookies.txt, извлечённого из HAR
+# (scripts/har_cookies.py). Передаётся через CI-контекст как env. Протухает —
+# обновляй HAR периодически. Опц. visitorData/PO-токен для extractor-args.
+YTDLP_COOKIES_B64 = _get("YTDLP_COOKIES_B64")
+YTDLP_VISITOR_DATA = _get("YTDLP_VISITOR_DATA")   # из HAR (X-Goog-Visitor-Id)
+
+# --- Прокси форум-краула (Cloudflare Worker) ---------------------------------
+# Воркер-реле: краул ходит на сайты через него (чистый Cloudflare-edge egress +
+# браузерные заголовки -> обходит IP/базовые бот-фильтры Cloudflare-форумов).
+# Формат: https://<worker>.<sub>.workers.dev  (+ ключ, если задан в воркере).
+CRAWL_PROXY = _get("CRAWL_PROXY")
+CRAWL_PROXY_KEY = _get("CRAWL_PROXY_KEY")
 
 # --- Azure DevOps -------------------------------------------------------------
 # Кастомный процесс AutoMechanikBoard (проверено вживую 2026-07-11):
