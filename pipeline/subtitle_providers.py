@@ -147,37 +147,52 @@ def _via_tubetranscript(video_id: str) -> TranscriptResult:
     # -> ПЕРЕХВАТЫВАЕМ его ответ = ПОЛНЫЙ транскрипт с таймкодами, минуя DOM. Старый
     # путь читал .transcript-text из ВИРТУАЛИЗОВАННОГО списка -> в DOM только ~2
     # видимых сегмента -> обрезка «2 строки» (баг, из-за которого падала дистилляция).
+    print(f"[tubetranscript] стартую для видео {video_id}")
     page = _tt_ctx().new_page()
     captured: dict = {}
 
     def _on_resp(resp):
         if "yt-to-text.com/api/v1/Subtitles" in resp.url and resp.status == 200:
             try:
-                captured["data"] = resp.json()
-            except Exception:  # noqa: BLE001
-                pass
+                data = resp.json()
+                print(f"[tubetranscript]   ✅ API ответ перехвачен, размер: {len(str(data))} байт")
+                captured["data"] = data
+            except Exception as e:  # noqa: BLE001
+                print(f"[tubetranscript]   ✗ ошибка парсинга API ответа: {e}")
 
     page.on("response", _on_resp)
     try:
+        print(f"[tubetranscript]   переходу на tubetranscript.com/watch?v={video_id}")
         page.goto(f"https://tubetranscript.com/en/watch?v={video_id}",
                   wait_until="domcontentloaded", timeout=45000)
+        print(f"[tubetranscript]   страница загружена, жду API ответа...")
+
         trs = None
-        for _ in range(40):                    # ждём, пока фронт получит транскрипт
+        for i in range(40):                    # ждём, пока фронт получит транскрипт
             d = captured.get("data")
             trs = ((d or {}).get("data") or {}).get("transcripts")
             if trs:
+                print(f"[tubetranscript]   ✅ транскрипт получен через {i} сек ({len(trs)} сегментов)")
                 break
+            if i % 10 == 0:
+                print(f"[tubetranscript]   ждём... ({i}/40 сек)")
             page.wait_for_timeout(1000)
+
         if not trs:
-            raise RuntimeError("tubetranscript: API yt-to-text не отдал transcripts")
+            raise RuntimeError("tubetranscript: API yt-to-text не отдал transcripts за 40 сек")
+
         lines = [(int(float(t.get("s") or 0)), (t.get("t") or "").strip())
                  for t in trs if (t.get("t") or "").strip()]
+        print(f"[tubetranscript]   обработано {len(lines)} строк из {len(trs)} сегментов")
+
         if not lines:
-            raise RuntimeError("tubetranscript: пустой транскрипт (API)")
+            raise RuntimeError("tubetranscript: пустой транскрипт (все сегменты пусты)")
+
         raw = json.dumps(
             {"content": [{"offset": int(float(t.get("s") or 0) * 1000),
                           "text": t.get("t") or ""} for t in trs]},
             ensure_ascii=False)
+        print(f"[tubetranscript]   ✅ успешно! {len(lines)} строк, {len(raw)} байт")
         return TranscriptResult(lang="", lines=lines, raw=raw, raw_ext="json",
                                 provider="tubetranscript")
     finally:
