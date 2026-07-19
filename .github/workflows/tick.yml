@@ -1,0 +1,60 @@
+# GitHub Actions: один тик конвейера AutoMech под ОДНИМ аккаунтом/репо.
+# Без кольца и без эстафеты аккаунтам — расписание держит нативный cron ниже.
+# Секреты (Settings -> Secrets and variables -> Actions -> New repository secret):
+#   ADO_ORG, ADO_PROJECT, ADO_PAT                — доска Azure DevOps
+#   YOUTUBE_API_KEY                              — discovery (опц., есть yt-dlp фолбэк)
+#   DISTILL_API_KEY (или NIM_API_KEY)            — дистилляция (используется облачным
+#                                                    агентом, не этим тиком, но пусть будет)
+#   SUPADATA_API_KEY, YTDLP_PROXY                — субтитры/прокси (опц.)
+#   CRAWL_PROXY, CRAWL_PROXY_KEY                 — форум-краул (опц.)
+#   S3_ENDPOINT, S3_KEY, S3_SECRET               — архив (опц.)
+#   QDRANT_URL, QDRANT_API_KEY                   — индекс (опц.)
+#   BACKUP_REPO, BACKUP_GITHUB_TOKEN             — репо ежедневного бэкапа (опц.)
+
+name: automech-tick
+
+on:
+  workflow_dispatch:      # ручной запуск для теста
+  schedule:
+    - cron: "0 */6 * * *" # раз в 6 часов — подстройте под свой месячный бюджет минут
+
+concurrency:
+  group: automech-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: зависимости + Chromium (tubetranscript / forums-js)
+        run: |
+          pip install -q "yt-dlp[default,curl-cffi]" playwright -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: один тик конвейера
+        env:
+          ADO_ORG: ${{ secrets.ADO_ORG }}
+          ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          DISTILL_API_KEY: ${{ secrets.DISTILL_API_KEY }}
+          SUPADATA_API_KEY: ${{ secrets.SUPADATA_API_KEY }}
+          YTDLP_PROXY: ${{ secrets.YTDLP_PROXY }}
+          CRAWL_PROXY: ${{ secrets.CRAWL_PROXY }}
+          CRAWL_PROXY_KEY: ${{ secrets.CRAWL_PROXY_KEY }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_KEY: ${{ secrets.S3_KEY }}
+          S3_SECRET: ${{ secrets.S3_SECRET }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
+          BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
+        run: |
+          python scripts/ci_tick.py --batch 10 --partition solo
