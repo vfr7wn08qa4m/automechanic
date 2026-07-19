@@ -14,14 +14,14 @@
 name: automech-tick
 
 on:
-  workflow_dispatch:      # ручной запуск для теста
+  workflow_dispatch:      # ручной запуск для теста кольца
     inputs:
       task:
-        description: "Force specific task (subs/embed/delta/discover/forums) or random"
+        description: "Force specific task (subs/forums/delta/embed/discover) or random if empty"
         required: false
         default: ""
       run_all:
-        description: "Run ALL tasks in sequence (subs→embed→delta→discover→forums)"
+        description: "TEST MODE: Run ALL tasks in random order (subs→forums→delta→embed→discover)"
         required: false
         default: "false"
   schedule:
