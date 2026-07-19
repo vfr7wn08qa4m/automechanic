@@ -15,6 +15,11 @@ name: automech-tick
 
 on:
   workflow_dispatch:      # ручной запуск для теста
+    inputs:
+      task:
+        description: "Force specific task (subs/embed/delta/discover/forums) or random"
+        required: false
+        default: ""
   schedule:
     - cron: "0 */6 * * *" # раз в 6 часов — подстройте под свой месячный бюджет минут
 
@@ -57,4 +62,8 @@ jobs:
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
           BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
         run: |
-          python scripts/ci_tick.py --batch 10 --partition solo
+          TASK_ARG=""
+          if [ -n "${{ github.event.inputs.task }}" ]; then
+            TASK_ARG="--task ${{ github.event.inputs.task }}"
+          fi
+          python scripts/ci_tick.py --batch 10 --partition solo $TASK_ARG
