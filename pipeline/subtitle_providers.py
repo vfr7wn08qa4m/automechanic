@@ -299,20 +299,28 @@ def transcript_for_item(url: str, video_id: str) -> TranscriptResult:
 
 def get_transcript(video_id: str) -> TranscriptResult:
     """Пройти по цепочке провайдеров, вернуть первый успешный транскрипт."""
+    print(f"[subs] видео {video_id}: цепочка провайдеров = {SUBTITLE_PROVIDERS}")
     errors: list[str] = []
     for name in SUBTITLE_PROVIDERS:
+        print(f"[subs]   пробую {name}...")
         fn = _PROVIDERS.get(name)
         if fn is None:
             errors.append(f"{name}: unknown provider")
+            print(f"[subs]     ✗ {name} not found in _PROVIDERS")
             continue
         try:
             res = fn(video_id)
+            print(f"[subs]     результат: {len(res.lines)} строк, provider={res.provider}")
             # страховка от обрезки: реальный кейс-транскрипт — это десятки+ строк.
             # 1-2 строки = провайдер недотянул (напр. отдал интро) -> следующий.
             if res.lines and len(res.lines) >= _MIN_TRANSCRIPT_LINES:
+                print(f"[subs]   ✅ успешно через {name}!")
                 res.errors = errors
                 return res
             errors.append(f"{name}: короткий/пустой ({len(res.lines)} строк)")
+            print(f"[subs]     ⚠ слишком короткий, пробую следующий")
         except Exception as e:  # noqa: BLE001
-            errors.append(f"{name}: {str(e)[:160]}")
+            err_msg = str(e)[:160]
+            errors.append(f"{name}: {err_msg}")
+            print(f"[subs]     ✗ ошибка: {err_msg}")
     raise RuntimeError(f"транскрипт не добыт ({video_id}): " + " | ".join(errors))
