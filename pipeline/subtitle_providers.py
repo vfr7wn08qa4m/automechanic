@@ -277,9 +277,7 @@ def _via_supadata(video_id: str) -> TranscriptResult:
         provider="supadata")
 
 
-_PROVIDERS = {"ytdlp": _via_ytdlp, "invidious": _via_invidious,
-              "supadata": _via_supadata, "tubetranscript": _via_tubetranscript,
-              "yttio": _via_yttio}
+_PROVIDERS = {"tubetranscript": _via_tubetranscript}
 
 
 def lines_from_raw(raw_ext: str, raw: str) -> list[tuple[int, str]]:
