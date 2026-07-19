@@ -115,12 +115,13 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=int(os.getenv("TICK_BATCH", "10")))
     ap.add_argument("--partition", default=os.getenv("PARTITION") or None)
     ap.add_argument("--task", default=None, help="принудительная задача (иначе рандом)")
+    ap.add_argument("--run-all", action="store_true", help="выполнить ВСЕ задачи по цепочке")
     args = ap.parse_args()
     if args.partition in ("solo", ""):
         args.partition = None
 
     print(f"[tick] ========== START ==========")
-    print(f"[tick] batch={args.batch}, partition={args.partition}, task={args.task}")
+    print(f"[tick] batch={args.batch}, partition={args.partition}, task={args.task}, run_all={args.run_all}")
 
     print(f"[tick] проверка бюджета...")
     if not guard(20):                   # месячный лимит минут исчерпан -> пропуск,
@@ -146,10 +147,6 @@ def main() -> None:
     except Exception as e:              # noqa: BLE001 — бэкап не должен рвать тик
         print(f"[tick] backup error: {str(e)[:160]}")
 
-    # 2) рандомная задача конвейера
-    task = args.task or _choose_task(ado)
-    print(f"[tick] выбранная задача: {task} (batch={args.batch}, partition={args.partition})")
-
     # диагностика состояния очереди
     try:
         new_count = len(ado.query_by_state("new", top=100) or [])
@@ -159,15 +156,34 @@ def main() -> None:
     except Exception as e:
         print(f"[tick] ошибка при запросе очереди: {str(e)[:100]}")
 
-    try:
-        worked = _run_task(task, ado, args.batch, args.partition)
-        print(f"[tick] задача {task} выполнена: worked={worked}")
-    except Exception as e:              # noqa: BLE001 — упавшая задача = пустой тик, кольцо едет
-        print(f"[tick] задача {task} упала: {str(e)[:200]}")
-        worked = False
-
-    ring_handoff("tick", worked=worked)
-    print(f"[tick] ========== END (worked={worked}) ==========")
+    # 2) выполнение задач
+    if args.run_all:
+        # Выполнить ВСЕ задачи по цепочке
+        tasks = ["subs", "embed", "delta", "discover", "forums"]
+        random.shuffle(tasks)  # перемешиваем порядок
+        print(f"[tick] режим run_all: выполняю {len(tasks)} задач по цепочке в порядке {tasks}")
+        total_worked = False
+        for task in tasks:
+            try:
+                worked = _run_task(task, ado, args.batch, args.partition)
+                print(f"[tick]   {task}: worked={worked}")
+                total_worked = total_worked or worked
+            except Exception as e:
+                print(f"[tick]   {task} упала: {str(e)[:100]}")
+        ring_handoff("tick", worked=total_worked)
+        print(f"[tick] ========== END (run_all, worked={total_worked}) ==========")
+    else:
+        # Рандомная или принудительная задача (оригинальное поведение)
+        task = args.task or _choose_task(ado)
+        print(f"[tick] выбранная задача: {task} (batch={args.batch}, partition={args.partition})")
+        try:
+            worked = _run_task(task, ado, args.batch, args.partition)
+            print(f"[tick] задача {task} выполнена: worked={worked}")
+        except Exception as e:              # noqa: BLE001 — упавшая задача = пустой тик, кольцо едет
+            print(f"[tick] задача {task} упала: {str(e)[:200]}")
+            worked = False
+        ring_handoff("tick", worked=worked)
+        print(f"[tick] ========== END (worked={worked}) ==========")
 
 
 if __name__ == "__main__":

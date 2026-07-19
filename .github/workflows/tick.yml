@@ -20,6 +20,10 @@ on:
         description: "Force specific task (subs/embed/delta/discover/forums) or random"
         required: false
         default: ""
+      run_all:
+        description: "Run ALL tasks in sequence (subs→embed→delta→discover→forums)"
+        required: false
+        default: "false"
   schedule:
     - cron: "0 */6 * * *" # раз в 6 часов — подстройте под свой месячный бюджет минут
 
@@ -67,4 +71,8 @@ jobs:
           if [ -n "${{ github.event.inputs.task }}" ]; then
             TASK_ARG="--task ${{ github.event.inputs.task }}"
           fi
-          python scripts/ci_tick.py --batch 10 --partition solo $TASK_ARG
+          RUN_ALL_ARG=""
+          if [ "${{ github.event.inputs.run_all }}" = "true" ]; then
+            RUN_ALL_ARG="--run-all"
+          fi
+          python scripts/ci_tick.py --batch 10 --partition solo $TASK_ARG $RUN_ALL_ARG
