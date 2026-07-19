@@ -66,14 +66,22 @@ def run_backup(ado, *, force: bool = False) -> bool:
 
     lines: list[str] = []
     # реестр источников: эпики каналов и форумов (активные и на паузе)
+    print(f"[backup] загрузка эпиков-источников...")
     epics = (ado.list_channel_items(kind="channel", active_only=False)
              + ado.list_channel_items(kind="forum", active_only=False))
+    print(f"[backup]   загружено эпиков: {len(epics)}")
     for e in epics:
         lines.append(json.dumps({"type": "epic", **e}, ensure_ascii=False))
+
     # готовые воркайтемы (indexed) с телом тикета (там RepairCase + транскрипт)
+    print(f"[backup] запрос indexed воркайтемов...")
     ids = ado.query_by_state("indexed", top=100000)
+    print(f"[backup]   найдено indexed: {len(ids)}")
     fields = ("System.Title", "System.Tags", "System.State", "System.Description")
-    for wi in ado.get_batch(ids, fields=fields):
+    print(f"[backup] загрузка деталей воркайтемов...")
+    for i, wi in enumerate(ado.get_batch(ids, fields=fields)):
+        if i % 100 == 0:
+            print(f"[backup]   обработано {i}/{len(ids)}...")
         f = wi.get("fields", {})
         lines.append(json.dumps({
             "type": "workitem", "id": wi.get("id"),

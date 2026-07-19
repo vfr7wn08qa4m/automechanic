@@ -119,31 +119,55 @@ def main() -> None:
     if args.partition in ("solo", ""):
         args.partition = None
 
+    print(f"[tick] ========== START ==========")
+    print(f"[tick] batch={args.batch}, partition={args.partition}, task={args.task}")
+
+    print(f"[tick] проверка бюджета...")
     if not guard(20):                   # месячный лимит минут исчерпан -> пропуск,
+        print(f"[tick] бюджет исчерпан, пропуск")
         ring_handoff("tick", worked=False)   # но эстафету передаём дальше
         return
 
+    print(f"[tick] подключение к ADO...")
     ado = AdoClient()
+    print(f"[tick] ADO подключен: org={ado.org}, project={ado.project}")
 
     # 1) бэкап раз/сутки (не рандом): если сегодня не было — делаем и завершаем тик
+    print(f"[tick] проверка дневного бэкапа...")
     try:
         from pipeline.backup import run_backup
-        if run_backup(ado):
+        backup_result = run_backup(ado)
+        if backup_result:
+            print(f"[tick] бэкап выполнен успешно, тик завершён")
             ring_handoff("tick", worked=True)
             return
+        else:
+            print(f"[tick] бэкап не требуется (уже был сегодня)")
     except Exception as e:              # noqa: BLE001 — бэкап не должен рвать тик
         print(f"[tick] backup error: {str(e)[:160]}")
 
     # 2) рандомная задача конвейера
     task = args.task or _choose_task(ado)
-    print(f"[tick] задача: {task} (batch={args.batch}, partition={args.partition})")
+    print(f"[tick] выбранная задача: {task} (batch={args.batch}, partition={args.partition})")
+
+    # диагностика состояния очереди
+    try:
+        new_count = len(ado.query_by_state("new", top=100) or [])
+        distilled_count = len(ado.query_by_state("distilled", top=100) or [])
+        indexed_count = len(ado.query_by_state("indexed", top=100) or [])
+        print(f"[tick] очередь: new={new_count}, distilled={distilled_count}, indexed={indexed_count}")
+    except Exception as e:
+        print(f"[tick] ошибка при запросе очереди: {str(e)[:100]}")
+
     try:
         worked = _run_task(task, ado, args.batch, args.partition)
+        print(f"[tick] задача {task} выполнена: worked={worked}")
     except Exception as e:              # noqa: BLE001 — упавшая задача = пустой тик, кольцо едет
         print(f"[tick] задача {task} упала: {str(e)[:200]}")
         worked = False
 
     ring_handoff("tick", worked=worked)
+    print(f"[tick] ========== END (worked={worked}) ==========")
 
 
 if __name__ == "__main__":
