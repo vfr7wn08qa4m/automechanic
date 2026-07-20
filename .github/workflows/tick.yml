@@ -24,6 +24,18 @@ on:
         description: "TEST MODE: Run ALL tasks in random order (subs→forums→delta→embed→discover)"
         required: false
         default: "false"
+      batch:
+        description: "Batch size (для ring handoff)"
+        required: false
+        default: "10"
+      partition:
+        description: "Partition (для ring handoff)"
+        required: false
+        default: ""
+      idle:
+        description: "Ring IDLE counter (для ring handoff)"
+        required: false
+        default: "0"
   schedule:
     - cron: "0 */6 * * *" # раз в 6 часов — подстройте под свой месячный бюджет минут
 
@@ -65,6 +77,8 @@ jobs:
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
           BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
+          RING_IDLE: ${{ inputs.idle || '0' }}
+          PARTITION: ${{ inputs.partition || '' }}
           SUBTITLE_PROVIDERS: "tubetranscript"
         run: |
           TASK_ARG=""
@@ -75,4 +89,6 @@ jobs:
           if [ "${{ github.event.inputs.run_all }}" = "true" ]; then
             RUN_ALL_ARG="--run-all"
           fi
-          python scripts/ci_tick.py --batch 10 --partition solo $TASK_ARG $RUN_ALL_ARG
+          BATCH="${{ github.event.inputs.batch || '10' }}"
+          PARTITION="${{ github.event.inputs.partition || 'solo' }}"
+          python scripts/ci_tick.py --batch "$BATCH" --partition "$PARTITION" $TASK_ARG $RUN_ALL_ARG
