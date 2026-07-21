@@ -74,8 +74,10 @@ def _get_user_for_token(token: str) -> str | None:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             user_info = json.load(resp)
-            return user_info.get("login")
-    except Exception:
+            login = user_info.get("login")
+            return login
+    except Exception as e:
+        print(f"[ring] ERROR in _get_user_for_token: {type(e).__name__}: {str(e)[:80]}")
         return None
 
 
