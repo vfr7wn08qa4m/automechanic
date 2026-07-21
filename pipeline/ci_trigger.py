@@ -144,13 +144,19 @@ def ring_handoff(flow: str, *, worked: bool, partition: str | None = None,
 
     Поддержка: GitHub Actions (приоритет) или CircleCI (legacy).
     """
+    print(f"[ring] ring_handoff called: worked={worked}")
+    print(f"[ring] can_ring()={can_ring()}, can_ring_github()={can_ring_github()}, can_ring_circleci()={can_ring_circleci()}")
+    print(f"[ring] NEXT_GITHUB_TOKEN={bool(_env('NEXT_GITHUB_TOKEN'))}, NEXT_GITHUB_REPO={bool(_env('NEXT_GITHUB_REPO'))}, NEXT_GITHUB_WORKFLOW={bool(_env('NEXT_GITHUB_WORKFLOW'))}")
+
     if can_ring():
         size = _int_env("RING_SIZE", 1)
         next_idle = 0 if worked else _int_env("RING_IDLE", 0) + 1
+        print(f"[ring] size={size}, next_idle={next_idle} (RING_IDLE={_int_env('RING_IDLE', 0)})")
         if size and next_idle >= size:
             print(f"[ring] полный пустой круг ({next_idle}/{size}) — "
                   f"эстафета остановлена (очередь разгребена)")
             return None
         return trigger(flow, partition=partition, zone=zone, batch=batch,
                        idle=next_idle)
+    print(f"[ring] can_ring() returned False - no handoff")
     return None
