@@ -84,6 +84,10 @@ jobs:
           PARTITION: ${{ inputs.partition || '' }}
           SUBTITLE_PROVIDERS: "tubetranscript"
         run: |
+          echo "[workflow] GITHUB_ACTOR=$GITHUB_ACTOR"
+          echo "[workflow] github.actor=${{ github.actor }}"
+          echo "[workflow] Running ci_tick.py..."
+
           TASK_ARG=""
           if [ -n "${{ github.event.inputs.task }}" ]; then
             TASK_ARG="--task ${{ github.event.inputs.task }}"
