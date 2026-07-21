@@ -52,10 +52,9 @@ def _get_current_token_index(current_token: str) -> int:
         try:
             req = urllib.request.Request(
                 "https://api.github.com/user",
-                headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
-                timeout=10
+                headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
             )
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 user_info = json.load(resp)
                 current_user = _get_user_for_token(current_token)
                 if user_info.get("login") == current_user:
@@ -71,10 +70,9 @@ def _get_user_for_token(token: str) -> str | None:
     try:
         req = urllib.request.Request(
             "https://api.github.com/user",
-            headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
-            timeout=10
+            headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
         )
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             user_info = json.load(resp)
             return user_info.get("login")
     except Exception:
