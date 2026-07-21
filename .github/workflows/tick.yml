@@ -14,7 +14,7 @@
 name: automech-tick
 
 on:
-  workflow_dispatch:      # ручной запуск для теста кольца
+  workflow_dispatch:      # ручной запуск для теста кольца или явного пуша
     inputs:
       task:
         description: "Force specific task (subs/forums/delta/embed/discover) or random if empty"
@@ -27,17 +27,15 @@ on:
       batch:
         description: "Batch size (для ring handoff)"
         required: false
-        default: "10"
+        default: "3"
       partition:
         description: "Partition (для ring handoff)"
         required: false
-        default: ""
+        default: "solo"
       idle:
         description: "Ring IDLE counter (для ring handoff)"
         required: false
         default: "0"
-  schedule:
-    - cron: "0 */6 * * *" # раз в 6 часов — подстройте под свой месячный бюджет минут
 
 concurrency:
   group: automech-tick-${{ github.repository_owner }}
