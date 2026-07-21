@@ -100,7 +100,12 @@ def _get_next_token() -> str | None:
 
 
 def can_ring() -> bool:
-    """Кольцо: есть следующий аккаунт в цепочке из ghtockens.txt."""
+    """Кольцо: есть токены И файл .ring-stop не существует (off-switch).
+    Для остановки кольца создать файл .ring-stop в репо."""
+    # Off-switch: если существует файл .ring-stop, кольцо не работает
+    if Path(".ring-stop").exists():
+        print("[ring] файл .ring-stop найден - кольцо остановлено")
+        return False
     return _get_next_token() is not None
 
 
