@@ -29,7 +29,23 @@ def _int_env(name: str, default: int = 0) -> int:
 
 
 def _load_ring_tokens() -> list[str]:
-    """Загрузить токены кольца из ghtockens.txt (8 аккаунтов)."""
+    """Загрузить токены кольца. Источники (по приоритету):
+    1. RING_TOKENS env var (newline/comma-separated)
+    2. ghtockens.txt файл (локально)
+    """
+    # Вариант 1: RING_TOKENS из env (может быть установлена как GitHub Secret)
+    env_tokens = os.getenv("RING_TOKENS", "").strip()
+    if env_tokens:
+        print(f"[ring] Loading tokens from RING_TOKENS env variable...")
+        # Поддерживаем новая-разделённые или запятая-разделённые токены
+        tokens = [t.strip() for t in env_tokens.replace(',', '\n').split('\n') if t.strip()]
+        if tokens:
+            print(f"[ring]   Loaded {len(tokens)} tokens from RING_TOKENS")
+            return tokens
+        else:
+            print(f"[ring]   WARNING: RING_TOKENS empty or malformed")
+
+    # Вариант 2: ghtockens.txt файл (для локальной разработки)
     try:
         tokens_file = Path("ghtockens.txt")
         print(f"[ring] Trying ghtockens.txt at: {tokens_file.resolve()}")
@@ -41,12 +57,14 @@ def _load_ring_tokens() -> list[str]:
             print(f"[ring]   FOUND at: {tokens_file.resolve()}")
             with open(tokens_file) as f:
                 tokens = [line.strip() for line in f if line.strip()]
-                print(f"[ring]   Loaded {len(tokens)} tokens")
+                print(f"[ring]   Loaded {len(tokens)} tokens from file")
                 return tokens
         else:
             print(f"[ring]   FILE NOT FOUND!")
     except Exception as e:
-        print(f"[ring]   ERROR loading tokens: {type(e).__name__}: {str(e)[:80]}")
+        print(f"[ring]   ERROR loading from file: {type(e).__name__}: {str(e)[:80]}")
+
+    print(f"[ring] ERROR: No tokens found! Set RING_TOKENS env var or create ghtockens.txt")
     return []
 
 
