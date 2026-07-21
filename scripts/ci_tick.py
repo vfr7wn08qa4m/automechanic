@@ -209,7 +209,9 @@ def main() -> None:
             except Exception as e:
                 print(f"[tick] ошибка диагностики: {str(e)[:100]}")
 
-        ring_handoff("tick", worked=worked)
+        print(f"[tick] выполняю ring_handoff(worked={worked})...")
+        result = ring_handoff("tick", worked=worked)
+        print(f"[tick] ring_handoff вернул: {result}")
         print(f"[tick] ========== END (worked={worked}, ring_idle будет сброшена={worked}) ==========")
 
 
