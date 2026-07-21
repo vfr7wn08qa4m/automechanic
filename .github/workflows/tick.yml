@@ -60,6 +60,7 @@ jobs:
       - name: один тик конвейера
         env:
           GITHUB_ACTOR: ${{ github.actor }}
+          RING_TOKENS: ${{ secrets.RING_TOKENS }}
           ADO_ORG: ${{ secrets.ADO_ORG }}
           ADO_PROJECT: ${{ secrets.ADO_PROJECT }}
           ADO_PAT: ${{ secrets.ADO_PAT }}
