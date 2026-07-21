@@ -87,7 +87,24 @@ def _get_next_token() -> str | None:
     if len(tokens) < 2:
         return None
 
-    current_token = os.getenv("GITHUB_TOKEN") or _env("GITHUB_TOKEN")
+    # Сначала пробуем получить текущий токен из переменных (если явно передан)
+    current_token = os.getenv("CURRENT_GITHUB_TOKEN") or _env("CURRENT_GITHUB_TOKEN")
+
+    # Если не передан явно, пробуем угадать по github.actor (username)
+    if not current_token:
+        current_actor = os.getenv("GITHUB_ACTOR")
+        if current_actor:
+            # Пройтись по токенам и найти тот, который принадлежит current_actor
+            for token in tokens:
+                user = _get_user_for_token(token)
+                if user == current_actor:
+                    current_token = token
+                    break
+
+    # Фолбэк: если всё ещё нет, попробуем встроенный GITHUB_TOKEN
+    if not current_token:
+        current_token = os.getenv("GITHUB_TOKEN") or _env("GITHUB_TOKEN")
+
     if not current_token:
         return None
 
