@@ -165,16 +165,23 @@ def trigger(flow: str, *, partition: str | None = None, zone: str | None = None,
             batch: int | None = None, idle: int | None = None) -> str | None:
     """Запустить пайплайн СЛЕДУЮЩЕГО аккаунта в кольце."""
 
+    print(f"[ring] trigger() called: flow={flow}, partition={partition}, batch={batch}")
+
     if not can_ring():
+        print("[ring] FAIL: can_ring()=False - stopping trigger")
         return None
 
     next_token = _get_next_token()
     if not next_token:
+        print("[ring] FAIL: _get_next_token() returned None - no next token?")
         return None
+    print(f"[ring] OK: next_token found ({next_token[:12]}...)")
 
     next_user = _get_user_for_token(next_token)
     if not next_user:
+        print("[ring] FAIL: _get_user_for_token(next_token) returned None")
         return None
+    print(f"[ring] OK: next_user={next_user}")
 
     inputs: dict = {}
     if partition:
@@ -186,8 +193,11 @@ def trigger(flow: str, *, partition: str | None = None, zone: str | None = None,
     if idle is not None:
         inputs["idle"] = str(idle)
 
-    return _run_github_workflow(next_token, f"{next_user}/automechanic", "tick.yml",
+    print(f"[ring] Calling _run_github_workflow for {next_user}/automechanic...")
+    result = _run_github_workflow(next_token, f"{next_user}/automechanic", "tick.yml",
                                inputs, "ring")
+    print(f"[ring] _run_github_workflow returned: {result}")
+    return result
 
 
 def ring_handoff(flow: str, *, worked: bool, partition: str | None = None,
