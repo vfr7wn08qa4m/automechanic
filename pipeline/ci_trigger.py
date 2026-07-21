@@ -83,6 +83,7 @@ def _get_next_token() -> str | None:
     """Получить токен следующего аккаунта в кольце."""
     tokens = _load_ring_tokens()
     if len(tokens) < 2:
+        print("[ring] WARNING: less than 2 tokens loaded")
         return None
 
     # Сначала пробуем получить текущий токен из переменных (если явно передан)
@@ -91,27 +92,38 @@ def _get_next_token() -> str | None:
     # Если не передан явно, пробуем угадать по github.actor (username)
     if not current_token:
         current_actor = os.getenv("GITHUB_ACTOR")
+        print(f"[ring] GITHUB_ACTOR={current_actor}")
         if current_actor:
             # Пройтись по токенам и найти тот, который принадлежит current_actor
-            for token in tokens:
+            for i, token in enumerate(tokens):
                 user = _get_user_for_token(token)
+                print(f"[ring]   token[{i}] -> user={user}")
                 if user == current_actor:
                     current_token = token
+                    print(f"[ring]   MATCHED token[{i}]!")
                     break
+        if not current_token:
+            print(f"[ring] WARNING: No matching token found for {current_actor}")
 
     # Фолбэк: если всё ещё нет, попробуем встроенный GITHUB_TOKEN
     if not current_token:
         current_token = os.getenv("GITHUB_TOKEN") or _env("GITHUB_TOKEN")
+        print(f"[ring] Fallback to GITHUB_TOKEN (present={bool(current_token)})")
 
     if not current_token:
+        print("[ring] CRITICAL: no current_token found!")
         return None
 
     current_idx = _get_current_token_index(current_token)
+    print(f"[ring] current_idx={current_idx}")
     if current_idx == -1:
+        print("[ring] WARNING: current_idx=-1, token not in ring?")
         return None
 
     next_idx = (current_idx + 1) % len(tokens)
-    return tokens[next_idx]
+    next_token = tokens[next_idx]
+    print(f"[ring] next_idx={next_idx}, returning token for account {next_idx+1}")
+    return next_token
 
 
 def can_ring() -> bool:
