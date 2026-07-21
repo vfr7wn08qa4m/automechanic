@@ -32,13 +32,21 @@ def _load_ring_tokens() -> list[str]:
     """Загрузить токены кольца из ghtockens.txt (8 аккаунтов)."""
     try:
         tokens_file = Path("ghtockens.txt")
+        print(f"[ring] Trying ghtockens.txt at: {tokens_file.resolve()}")
         if not tokens_file.exists():
+            print(f"[ring]   Not found, trying alternate location...")
             tokens_file = Path(__file__).parent.parent / "ghtockens.txt"
+            print(f"[ring]   Trying: {tokens_file.resolve()}")
         if tokens_file.exists():
+            print(f"[ring]   FOUND at: {tokens_file.resolve()}")
             with open(tokens_file) as f:
-                return [line.strip() for line in f if line.strip()]
-    except Exception:
-        pass
+                tokens = [line.strip() for line in f if line.strip()]
+                print(f"[ring]   Loaded {len(tokens)} tokens")
+                return tokens
+        else:
+            print(f"[ring]   FILE NOT FOUND!")
+    except Exception as e:
+        print(f"[ring]   ERROR loading tokens: {type(e).__name__}: {str(e)[:80]}")
     return []
 
 
