@@ -56,9 +56,15 @@ class AdoClient:
         self.base = f"https://dev.azure.com/{self.org}/{self.project}/_apis"
 
     # --- низкоуровневое ---------------------------------------------------
-    def _wiql(self, query: str) -> list[int]:
-        r = self.s.post(f"{self.base}/wit/wiql?api-version={API}",
-                        json={"query": query}, timeout=30)
+    def _wiql(self, query: str, top: int | None = None) -> list[int]:
+        # $top ограничивает ЧИСЛО возвращаемых строк на сервере. Без него ADO бьёт
+        # VS402337 «exceeds the size limit of 20000», как только МАТЧ > 20000 —
+        # на большом бэклоге (subs >20k) это роняло любой query_by_state ещё до
+        # чтения метаданных. С $top отдаётся первые N по ORDER BY и лимит не бьёт.
+        url = f"{self.base}/wit/wiql?api-version={API}"
+        if top:
+            url += f"&$top={int(top)}"
+        r = self.s.post(url, json={"query": query}, timeout=30)
         r.raise_for_status()
         return [wi["id"] for wi in r.json().get("workItems", [])]
 
@@ -95,10 +101,12 @@ class AdoClient:
         return r.json()["id"]
 
     def _find_marker(self, marker: str) -> int | None:
+        proj = self.project.replace("'", "''")
+        mrk = marker.replace("'", "''")
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
-            f"WHERE [System.TeamProject] = '{self.project}' "
-            f"AND [System.Title] CONTAINS '{marker}'")
+            f"WHERE [System.TeamProject] = '{proj}' "
+            f"AND [System.Title] CONTAINS '{mrk}'")
         return ids[0] if ids else None
 
     # --- каналы/форумы (Epic-уровень, «таблица источников») -------------------
@@ -132,10 +140,12 @@ class AdoClient:
     def channel_shards(self, channel_id: str, kind: str = "channel") -> list[dict]:
         """Все чанки канала: [{wi_id, chunk}] по возрастанию chunk."""
         marker = self._marker(kind)
+        proj = self.project.replace("'", "''")
+        search = f"{marker}:{channel_id}".replace("'", "''")
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
-            f"WHERE [System.TeamProject] = '{self.project}' "
-            f"AND [System.Title] CONTAINS '{marker}:{channel_id}'")
+            f"WHERE [System.TeamProject] = '{proj}' "
+            f"AND [System.Title] CONTAINS '{search}'")
         out = []
         for wi in self.get_batch(ids):
             parsed = self._parse_channel_marker(wi["fields"].get("System.Title", ""), marker)
@@ -401,13 +411,19 @@ class AdoClient:
                        partition: str | None = None) -> list[int]:
         """Task'и в логическом состоянии (маппится на реальный System.State)."""
         real = STATE_MAP.get(state, state)
+        # Ограничиваем выборку НА СЕРВЕРЕ (ORDER BY CreatedDate ASC -> самые старые
+        # первыми, ровно что нужно конвейеру). Иначе на бэклоге >20000 ADO вернёт
+        # VS402337 и весь клеймо-цикл встанет. При partition берём с запасом, т.к.
+        # чётность отфильтрует ~половину. Жёсткий потолок 19999 < лимита ADO.
+        srv_top = top if partition is None else top * 2 + 10
+        srv_top = min(srv_top, 19999)
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
             f"WHERE [System.TeamProject] = '{self.project}' "
             f"AND [System.WorkItemType] = '{config.ADO_WORKITEM_TYPE}' "
             f"AND [System.State] = '{real}' "
             "AND [System.Tags] CONTAINS 'auto-mech' "
-            "ORDER BY [System.CreatedDate] ASC")
+            "ORDER BY [System.CreatedDate] ASC", top=srv_top)
         # partition оставлен опцией; по умолчанию не делим — полагаемся на claim
         if partition == "even":
             ids = [i for i in ids if i % 2 == 0]
