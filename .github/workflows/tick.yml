@@ -81,8 +81,9 @@ jobs:
           NEXT_GITHUB_REPO: ${{ secrets.NEXT_GITHUB_REPO }}
           NEXT_GITHUB_WORKFLOW: ${{ secrets.NEXT_GITHUB_WORKFLOW }}
           RING_SIZE: ${{ secrets.RING_SIZE }}
-          RING_IDLE: ${{ inputs.idle || '0' }}
-          PARTITION: ${{ inputs.partition || '' }}
+          RING_IDLE: ${{ github.event.inputs.idle || '0' }}
+          BATCH: ${{ github.event.inputs.batch || '10' }}
+          PARTITION: ${{ github.event.inputs.partition || 'solo' }}
           SUBTITLE_PROVIDERS: "tubetranscript"
         run: |
           echo "[workflow] GITHUB_ACTOR=$GITHUB_ACTOR"
@@ -97,6 +98,4 @@ jobs:
           if [ "${{ github.event.inputs.run_all }}" = "true" ]; then
             RUN_ALL_ARG="--run-all"
           fi
-          BATCH="${{ github.event.inputs.batch || '10' }}"
-          PARTITION="${{ github.event.inputs.partition || 'solo' }}"
           python scripts/ci_tick.py --batch "$BATCH" --partition "$PARTITION" $TASK_ARG $RUN_ALL_ARG
