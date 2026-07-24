@@ -34,6 +34,13 @@ DISTILL_API_KEY = _get("DISTILL_API_KEY", "NIM_API_KEY", "NVIDIA_NIM_API_KEY")
 # ВНИМАНИЕ: у моделей NIM есть EOL (410 Gone) — список сверять на build.nvidia.com
 DISTILL_MODEL = _get("DISTILL_MODEL", default="minimaxai/minimax-m2.7")
 
+# --- Qwen для дистилляции (альтернатива NIM/DeepSeek) -------------------------
+# Qwen 3.8 очень хорошо справляется с диагностикой авто. Прямой API к Alibaba.
+# Использование: python scripts/local_distill_batch.py --use-qwen
+QWEN_TOKEN = _get("QWEN_TOKEN")  # JWT из localStorage chat.qwen.ai -> "token"
+# Опциональные файлы конфигурации (рядом с pipeline/qwen_api.py):
+#   token.txt, device_id.txt, bx_ua.txt, bx_umidtoken.txt
+
 # Каскад дистилляции: точки с запятой между эндпоинтами,
 # внутри "base_url|ИМЯ_ENV_С_КЛЮЧОМ_или_none|model". Первый — основной,
 # следующие пробуются при 429/402/410/5xx/таймаутах. Пример в .env.example.
