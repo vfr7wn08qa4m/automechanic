@@ -143,30 +143,23 @@ def main() -> None:
     ado = AdoClient()
     print(f"[tick] ADO подключен: org={ado.org}, project={ado.project}")
 
-    # 1) бэкап раз/сутки (не рандом): если сегодня не было — делаем и завершаем тик
-    print(f"[tick] проверка дневного бэкапа...")
-    try:
-        from pipeline.backup import run_backup
-        backup_result = run_backup(ado)
-        if backup_result:
-            print(f"[tick] бэкап выполнен успешно, тик завершён")
-            ring_handoff("tick", worked=True)
-            return
-        else:
-            print(f"[tick] бэкап не требуется (уже был сегодня)")
-    except Exception as e:              # noqa: BLE001 — бэкап не должен рвать тик
-        print(f"[tick] backup error: {str(e)[:160]}")
-
-    # диагностика состояния очереди
+    # диагностика состояния очереди ДО РАБОТЫ
     try:
         new_count = len(ado.query_by_state("new", top=100) or [])
         distilled_count = len(ado.query_by_state("distilled", top=100) or [])
         indexed_count = len(ado.query_by_state("indexed", top=100) or [])
-        print(f"[tick] очередь: new={new_count}, distilled={distilled_count}, indexed={indexed_count}")
+        queue_total = new_count + distilled_count
+        print(f"[tick] очередь: new={new_count}, distilled={distilled_count}, indexed={indexed_count} (total={queue_total})")
     except Exception as e:
         print(f"[tick] ошибка при запросе очереди: {str(e)[:100]}")
+        queue_total = 0
 
-    # 2) выполнение задач
+    # SKIP бэкап если в очереди > 1000 итемов (приоритет: обработка задач ≫ бэкап)
+    should_skip_backup = queue_total > 1000
+    if should_skip_backup:
+        print(f"[tick] [!] очередь перегружена ({queue_total} итемов) — пропускаем бэкап, идём в работу")
+
+    # выполнение задач (ОСНОВНАЯ РАБОТА — приоритет выше бэкапа)
     if args.run_all:
         # Выполнить ВСЕ задачи по цепочке
         tasks = ["subs", "embed", "delta", "discover", "forums"]
@@ -212,7 +205,22 @@ def main() -> None:
         print(f"[tick] выполняю ring_handoff(worked={worked})...")
         result = ring_handoff("tick", worked=worked)
         print(f"[tick] ring_handoff вернул: {result}")
-        print(f"[tick] ========== END (worked={worked}, ring_idle будет сброшена={worked}) ==========")
+
+    # 3) бэкап в КОНЦЕ (после работы, и только если очередь не перегружена)
+    if not should_skip_backup:
+        try:
+            from pipeline.backup import run_backup
+            backup_result = run_backup(ado)
+            if backup_result:
+                print(f"[tick] [+] бэкап выполнен успешно в конце тика")
+            else:
+                print(f"[tick] бэкап не требуется (уже был сегодня)")
+        except Exception as e:
+            print(f"[tick] backup error: {str(e)[:160]}")
+    else:
+        print(f"[tick] [!] бэкап пропущен (очередь перегружена)")
+
+    print(f"[tick] ========== END (worked={worked}, ring_idle будет сброшена={worked}) ==========")
 
 
 if __name__ == "__main__":
