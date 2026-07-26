@@ -81,7 +81,7 @@ jobs:
           NEXT_GITHUB_TOKEN: ${{ secrets.NEXT_GITHUB_TOKEN }}
           NEXT_GITHUB_REPO: ${{ secrets.NEXT_GITHUB_REPO }}
           NEXT_GITHUB_WORKFLOW: ${{ secrets.NEXT_GITHUB_WORKFLOW }}
-          RING_SIZE: ${{ secrets.RING_SIZE }}
+          RING_SIZE: "16"
           RING_IDLE: ${{ github.event.inputs.idle || '0' }}
           BATCH: ${{ github.event.inputs.batch || '10' }}
           PARTITION: ${{ github.event.inputs.partition || 'solo' }}
