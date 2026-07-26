@@ -1,8 +1,9 @@
 """Дневной бэкап ADO -> GitHub: реестр эпиков-источников (каналы/форумы) +
 готовые после эмбеда (indexed) воркайтемы с телом (RepairCase + транскрипт).
 
-Раз в сутки один снапшот `backups/<YYYY-MM-DD>.ndjson` через GitHub Contents API
-(без клона). Идемпотентность = гард «раз/сутки»: если файл за сегодня уже есть —
+Раз в сутки один снапшот `backups/<YYYY-MM-DD>.ndjson.gz` (gzip ~8-10× — текст
+жмётся отлично, снимает потолок Contents API) через GitHub Contents API (без
+клона). Идемпотентность = гард «раз/сутки»: если файл за сегодня уже есть —
 задача пропускается (это и есть маркер последнего бэкапа, отдельный стейт не нужен).
 
 Репо + токен из env (кладёт deploy.py в контекст 'automech'):
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import urllib.error
@@ -58,7 +60,7 @@ def run_backup(ado, *, force: bool = False) -> bool:
         return False
     branch = _env("BACKUP_BRANCH") or "main"
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    path = f"backups/{day}.ndjson"
+    path = f"backups/{day}.ndjson.gz"
 
     if not force and _exists(repo, token, path, branch):
         print(f"[backup] за {day} снапшот уже есть ({path}) — пропуск (раз/сутки)")
@@ -89,11 +91,12 @@ def run_backup(ado, *, force: bool = False) -> bool:
             "state": f.get("System.State"), "description": f.get("System.Description"),
         }, ensure_ascii=False))
 
-    blob = ("\n".join(lines) + "\n").encode("utf-8")
+    raw = ("\n".join(lines) + "\n").encode("utf-8")
+    blob = gzip.compress(raw, compresslevel=9)      # текст жмётся ~8-10×
     print(f"[backup] {day}: эпиков={len(epics)} indexed={len(ids)} "
-          f"размер={len(blob)//1024} КБ")
+          f"размер={len(raw)//1024} КБ -> gzip {len(blob)//1024} КБ")
     if len(blob) > 45 * 1024 * 1024:
-        print("[backup] ! снапшот >45 МБ — Contents API может отказать; "
+        print("[backup] ! сжатый снапшот >45 МБ — Contents API может отказать; "
               "нужен сплит по частям или Git Data API (доработать)")
 
     payload = {"message": f"backup {day} [skip ci]",
