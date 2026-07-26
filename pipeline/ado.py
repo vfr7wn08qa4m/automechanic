@@ -418,11 +418,13 @@ class AdoClient:
         srv_top = top if partition is None else top * 2 + 10
         srv_top = min(srv_top, 19999)
         proj = _wiql_quote(self.project)
+        workitem_type = _wiql_quote(config.ADO_WORKITEM_TYPE)
+        state = _wiql_quote(real)
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
             f"WHERE [System.TeamProject] = '{proj}' "
-            f"AND [System.WorkItemType] = '{config.ADO_WORKITEM_TYPE}' "
-            f"AND [System.State] = '{real}' "
+            f"AND [System.WorkItemType] = '{workitem_type}' "
+            f"AND [System.State] = '{state}' "
             "AND [System.Tags] CONTAINS 'auto-mech' "
             "ORDER BY [System.CreatedDate] ASC", top=srv_top)
         # partition оставлен опцией; по умолчанию не делим — полагаемся на claim
