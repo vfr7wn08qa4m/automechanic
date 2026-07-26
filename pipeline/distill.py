@@ -14,7 +14,7 @@ from openai import OpenAI
 from . import config
 from .case_schema import CASE_JSON_TEMPLATE, RepairCase, Source
 
-SYSTEM_PROMPT = """You are an expert auto electrician and data extractor.
+SYSTEM_PROMPT = """You are an expert auto mechanic and diagnostician (mechanical AND electrical) and data extractor.
 You receive a transcript of a car-repair video (any language) with [mm:ss] timestamps.
 Extract ONE structured repair case as JSON exactly matching this template:
 
@@ -44,6 +44,8 @@ Rules:
       doesn't prove a part is good; a new part can be defective; VIN/engine may be swapped).
   Example rule: {"parameter":"accelerator pedal sensor, %","op":"<=","value":85,"unit":"%",
   "conclusion":"normal by design on VAG cars","kind":"normal_baseline","scope":"make","confidence":0.8}
+  rules are DIAGNOSTIC/PROCEDURAL only (if→then, thresholds, procedures). Costs, prices,
+  labor-hours, market/economics and opinions do NOT go into rules — put them in notes.
 - scope (per pitfall) and applicability (whole case): how broadly the knowledge applies —
   "model" (only this model/generation), "make" (whole brand, e.g. "on all VW the pedal
   sensor maxes at ~75%"), "engine_type" (e.g. air in the injection pump -> bleed it: ANY
@@ -51,7 +53,7 @@ Rules:
   applicability_note: one phrase in the original language, e.g. "любой дизель с ТНВД".
 - timestamp_sec: integer seconds computed from the nearest [mm:ss] marker.
 - fixed: true only if the problem is confirmed solved in the video.
-- off_topic: true if this is NOT a concrete vehicle electrical/electronic diagnosis or repair (reviews, ads, vlogs, pure mechanics like brakes/suspension without electrics).
+- off_topic: true ONLY if this is NOT a concrete vehicle repair or diagnosis case — i.e. reviews, ads, unboxings, vlogs, or pure theory/opinion with no specific repair. ANY real repair or diagnosis is IN scope (off_topic=false): electrical, engine, transmission, suspension, brakes, body — all of it.
 - confidence: 0..1, your honest estimate of extraction quality.
 - If several unrelated problems are covered, extract the MAIN one, mention others in summary_en.
 Return ONLY the JSON object, no markdown fences, no commentary.""".replace(
