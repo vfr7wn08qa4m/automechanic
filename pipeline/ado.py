@@ -417,9 +417,10 @@ class AdoClient:
         # чётность отфильтрует ~половину. Жёсткий потолок 19999 < лимита ADO.
         srv_top = top if partition is None else top * 2 + 10
         srv_top = min(srv_top, 19999)
+        proj = _wiql_quote(self.project)
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
-            f"WHERE [System.TeamProject] = '{self.project}' "
+            f"WHERE [System.TeamProject] = '{proj}' "
             f"AND [System.WorkItemType] = '{config.ADO_WORKITEM_TYPE}' "
             f"AND [System.State] = '{real}' "
             "AND [System.Tags] CONTAINS 'auto-mech' "
