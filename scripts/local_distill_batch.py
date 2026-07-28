@@ -23,19 +23,6 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Локальный бутстрап кредов из accounts.json (как asr_backfill/local_fetch_subs):
-# в корне .env нет -> ADO + shared_secrets кладём в env ДО импорта pipeline (config
-# читает env при импорте), иначе AdoClient() падает «ADO_* не заданы». Заданный
-# env (из батника) не перетираем.
-_cfg = json.loads((ROOT / "accounts.json").read_text(encoding="utf-8"))
-_az = _cfg["azure"]
-os.environ.setdefault("ADO_ORG", _az["org"])
-os.environ.setdefault("ADO_PROJECT", _az["project"])
-os.environ.setdefault("ADO_PAT", _az["pat"])
-for _k, _v in (_cfg.get("shared_secrets") or {}).items():
-    if _v:
-        os.environ.setdefault(_k, str(_v))
-
 from pipeline import config                                   # noqa: E402
 from pipeline.ado import AdoClient                            # noqa: E402
 from pipeline.case_schema import Source                       # noqa: E402
