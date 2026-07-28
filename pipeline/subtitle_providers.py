@@ -310,6 +310,48 @@ def transcript_for_item(url: str, video_id: str) -> TranscriptResult:
     return get_transcript(video_id)
 
 
+def _fetch_audio(video_id: str):
+    """Аудио видео по цепочке провайдеров (env AUDIO_PROVIDERS, дефолт
+    'convert1s,ytdlp'): convert1s (сторонний YouTube→MP3, тянет YouTube на СВОИХ
+    серверах → работает с ДАТАЦЕНТРА/кольца) → yt-dlp (прямой, только домашний IP)."""
+    import os
+    providers = (os.getenv("AUDIO_PROVIDERS") or "convert1s,ytdlp").split(",")
+    errors = []
+    for prov in [p.strip() for p in providers if p.strip()]:
+        try:
+            if prov == "convert1s":
+                from .audio_convert1s import fetch_mp3
+                return fetch_mp3(video_id)
+            if prov in ("ytdlp", "yt-dlp"):
+                from .subtitles import download_audio
+                return download_audio(f"https://www.youtube.com/watch?v={video_id}")
+        except Exception as e:  # noqa: BLE001 — пробуем следующий провайдер
+            errors.append(f"{prov}: {str(e)[:160]}")
+    raise RuntimeError("audio: все провайдеры не смогли скачать: " + " || ".join(errors))
+
+
+def asr_transcript(video_id: str) -> TranscriptResult:
+    """Whisper-фолбэк для видео БЕЗ титров: качаем аудио (convert1s с датацентра /
+    yt-dlp с дома — см. _fetch_audio) и распознаём (pipeline/asr.py: CF free /
+    faster-whisper / Kaggle T4 по env ASR_PROVIDERS). Тяжело (минуты на видео) ->
+    НЕ в основной subs-цепочке, а проходом scripts/asr_backfill.py по браку."""
+    from . import asr
+    audio = _fetch_audio(video_id)
+    try:
+        lines = asr.transcribe_file(audio)
+    finally:
+        try:
+            audio.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if not lines:
+        raise RuntimeError("asr: пустой транскрипт (Whisper ничего не распознал)")
+    raw = json.dumps({"content": [{"offset": s * 1000, "text": t}
+                                  for s, t in lines]}, ensure_ascii=False)
+    return TranscriptResult(lang="", lines=lines, raw=raw, raw_ext="json",
+                            provider="whisper-asr")
+
+
 def get_transcript(video_id: str) -> TranscriptResult:
     """Пройти по цепочке провайдеров, вернуть первый успешный транскрипт."""
     print(f"[subs] видео {video_id}: цепочка провайдеров = {SUBTITLE_PROVIDERS}")
