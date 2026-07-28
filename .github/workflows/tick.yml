@@ -76,12 +76,15 @@ jobs:
           S3_SECRET: ${{ secrets.S3_SECRET }}
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
           BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
           NEXT_GITHUB_TOKEN: ${{ secrets.NEXT_GITHUB_TOKEN }}
           NEXT_GITHUB_REPO: ${{ secrets.NEXT_GITHUB_REPO }}
           NEXT_GITHUB_WORKFLOW: ${{ secrets.NEXT_GITHUB_WORKFLOW }}
-          RING_SIZE: "18"
+          RING_SIZE: "19"
           RING_IDLE: ${{ github.event.inputs.idle || '0' }}
           BATCH: ${{ github.event.inputs.batch || '10' }}
           PARTITION: ${{ github.event.inputs.partition || 'solo' }}
