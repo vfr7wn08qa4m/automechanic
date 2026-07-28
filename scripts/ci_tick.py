@@ -4,20 +4,22 @@
 оркестрация теперь внутри кольца (pipeline/ci_trigger.ring_handoff).
 
 Задачи (веса в пуле):
-  subs (35%)   — youtube_transcripts: state:new -> транскрипт+комменты -> state:subs
-  forums (30%) — forum_posts: краул форума -> новые посты -> state:subs
-  delta (20%)  — sync_youtube_channel_videos: активные каналы -> новые видео -> state:new
-  embed (10%)  — index_to_qdrant: state:distilled -> embedding -> Qdrant -> state:indexed
+  subs (35%)    — youtube_transcripts: state:new -> транскрипт+комменты -> state:subs
+  forums (30%)  — forum_posts: краул форума -> новые посты -> state:subs
+  delta (20%)   — sync_youtube_channel_videos: активные каналы -> новые видео -> state:new
+  distill (15%) — LLM-дистилляция: state:subs -> RepairCase -> state:distilled/offtopic
+  embed (10%)   — index_to_qdrant: state:distilled -> embedding -> Qdrant -> state:indexed
+  asr (15%)     — Whisper для видео БЕЗ титров -> state:subs
   discover (5%) — discover_youtube_channels: seed-запросы (~1мин) -> новые каналы
 Backup — НЕ рандом, а гард «раз/сутки»: если сегодня бэкапа не было, тик
 делает бэкап (эпики + indexed -> GitHub) и завершает тик (эстафета передаётся).
 
-Дистилляцию (state:subs -> RepairCase) делает облачный Claude-агент, НЕ CI.
 Кольцо: ring_handoff() передаёт эстафету следующему аккаунту GitHub.
 
-Стиринг: если в state:new пусто — subs не выбираем; если distilled пусто — embed
-не выбираем (не тратим тик впустую). worked=True сбрасывает idle кольца, worked=
-False растит его; кольцо встаёт, когда полный круг прошёл без работы.
+Стиринг: если в state:new пусто — subs не выбираем; если state:subs пусто —
+ distill не выбираем; если distilled пусто — embed не выбираем (не тратим тик
+впустую). worked=True сбрасывает idle кольца, worked=False растит его; кольцо
+встаёт, когда полный круг прошёл без работы.
 
     python scripts/ci_tick.py [--batch 10] [--partition solo] [--task subs]
 """
@@ -62,12 +64,15 @@ def _choose_task(ado) -> str:
         "subs":     int(os.getenv("W_SUBS", "35")),      # youtube_transcripts
         "forums":   int(os.getenv("W_FORUMS", "30")),    # forum_posts
         "delta":    int(os.getenv("W_DELTA", "20")),     # sync_youtube_channel_videos
+        "distill":  int(os.getenv("W_DISTILL", "15")),   # LLM-дистилляция
         "embed":    int(os.getenv("W_EMBED", "10")),     # index_to_qdrant
         "asr":      int(os.getenv("W_ASR", "15")),       # Whisper для видео БЕЗ титров
         "discover": int(os.getenv("W_DISCOVER", "5")),   # discover_youtube_channels
     }
     if not _has(ado, "new"):
         weights["subs"] = 0            # нечего транскрибировать
+    if not _has(ado, "subs"):
+        weights["distill"] = 0         # нечего дистиллировать
     if not _has(ado, "distilled"):
         weights["embed"] = 0           # нечего индексировать
     if weights.get("asr") and not _has_asr_backlog(ado):
@@ -98,6 +103,19 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
             print(f"[tick] fallback: вместо subs выполняю {alt_task}")
             return _run_task(alt_task, ado, batch, partition)
         return worked
+
+    if task == "distill":
+        # Перед тем как трогать очередь state:subs, проверяем API дистилляции в облаке.
+        from pipeline.distill import healthcheck as distill_healthcheck
+        ok, msg = distill_healthcheck()
+        print(f"[tick] distill healthcheck: {msg}")
+        if not ok:
+            print("[tick] distill API недоступен, очередь state:subs не трогаем")
+            return False
+        from scripts.local_distill_batch import distill_batch
+        # Дистилляция — долгий API-вызов; не даём одному тику съесть весь таймаут.
+        n = distill_batch(ado, min(batch, 5), partition)
+        return n > 0
 
     if task == "embed":
         from scripts.embed_index_batch import embed_batch
@@ -190,7 +208,7 @@ def main() -> None:
     # выполнение задач (ОСНОВНАЯ РАБОТА — приоритет выше бэкапа)
     if args.run_all:
         # Выполнить ВСЕ задачи по цепочке
-        tasks = ["subs", "embed", "delta", "discover", "forums"]
+        tasks = ["subs", "distill", "embed", "delta", "discover", "forums"]
         random.shuffle(tasks)  # перемешиваем порядок
         print(f"[tick] режим run_all: выполняю {len(tasks)} задач по цепочке")
         print(f"[tick] порядок: {tasks}")
