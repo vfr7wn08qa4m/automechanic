@@ -13,68 +13,53 @@ from __future__ import annotations
 
 import argparse
 import html as _html
+import json
 import os
 import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+# Локальный бутстрап кредов из accounts.json (как asr_backfill/local_fetch_subs):
+# в корне .env нет -> ADO + shared_secrets кладём в env ДО импорта pipeline (config
+# читает env при импорте), иначе AdoClient() падает «ADO_* не заданы». Заданный
+# env (из батника) не перетираем.
+_cfg = json.loads((ROOT / "accounts.json").read_text(encoding="utf-8"))
+_az = _cfg["azure"]
+os.environ.setdefault("ADO_ORG", _az["org"])
+os.environ.setdefault("ADO_PROJECT", _az["project"])
+os.environ.setdefault("ADO_PAT", _az["pat"])
+for _k, _v in (_cfg.get("shared_secrets") or {}).items():
+    if _v:
+        os.environ.setdefault(_k, str(_v))
 
 from pipeline import config                                   # noqa: E402
 from pipeline.ado import AdoClient                            # noqa: E402
 from pipeline.case_schema import Source                       # noqa: E402
 from pipeline.distill import distill                          # noqa: E402
-from pipeline.store import append_jsonl, archive_blob, s3_client  # noqa: E402
-from pipeline.subtitle_providers import lines_from_raw, transcript_for_item  # noqa: E402
-from pipeline.subtitles import to_prompt_text                 # noqa: E402
+from pipeline.store import append_jsonl, archive_blob        # noqa: E402
+from pipeline.tools import _material_from_body               # noqa: E402
 
 
-def load_lines(vid: str) -> tuple[str, list[tuple[int, str]]] | None:
-    """Транскрипт из R2-архива: (lang, lines) или None."""
-    if not config.S3_ENDPOINT:
-        return None
-    s3 = s3_client()
-    listed = s3.list_objects_v2(Bucket=config.S3_BUCKET, Prefix=f"subs/{vid}.")
-    for obj in listed.get("Contents", []):
-        key = obj["Key"]                       # subs/{vid}.{lang}.{ext}
-        parts = key.rsplit(".", 2)
-        lang, ext = parts[-2], parts[-1]
-        raw = s3.get_object(Bucket=config.S3_BUCKET, Key=key)["Body"].read()
-        return lang, lines_from_raw(ext, raw.decode("utf-8", errors="replace"))
-    return None
+def distill_batch(ado, batch: int, partition: str | None,
+                  worker: str | None = None) -> int:
+    """Один батч дистилляции: state:subs -> RepairCase -> state:distilled/offtopic.
 
-
-def _forum_text(wi: dict) -> str:
-    """Текст форум-треда из тела ADO-тикета (краул кладёт его туда): HTML -> плоский."""
-    desc = wi["fields"].get("System.Description", "") or ""
-    desc = desc.split("<hr><b>RepairCase", 1)[0]     # не тащим уже дописанный кейс
-    txt = _html.unescape(re.sub(r"<[^>]+>", " ", desc))
-    return re.sub(r"\s+", " ", txt).strip()
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--batch", type=int, default=20)
-    ap.add_argument("--partition", choices=["even", "odd", "solo"],
-                    default=os.getenv("PARTITION") or None)
-    args = ap.parse_args()
-    if args.partition == "solo":
-        args.partition = None
-    worker = f"distill-{args.partition or os.getenv('CI_ACCOUNT', 'solo')}"
-
-    from pipeline.ci_budget import guard
-    if not guard(20):     # месячный лимит минут исчерпан -> тихий выход
-        return
-
-    ado = AdoClient()
-    ids = ado.query_by_state("subs", top=args.batch, partition=args.partition)
-    print(f"work items в state:subs (partition={args.partition}): {len(ids)}")
-
+    Возвращает количество обработанных (claimed) воркайтемов.
+    """
+    if worker is None:
+        worker = f"distill-{partition or os.getenv('CI_ACCOUNT', 'solo')}"
+    ids = ado.query_by_state("subs", top=batch, partition=partition)
+    print(f"work items в state:subs (partition={partition}): {len(ids)}")
+    processed = 0
     for wi_id in ids:
         if not ado.claim(wi_id, worker):
             print(f"  #{wi_id}: уже занят, пропуск")
             continue
+        processed += 1
         wi = ado.get(wi_id)
         title = wi["fields"]["System.Title"]
         vid = ado.video_id_from_title(title)
@@ -82,24 +67,25 @@ def main() -> None:
         url = (AdoClient.source_url(wi)
                or f"https://www.youtube.com/watch?v={vid}")
         try:
-            if is_forum:                       # источник — текст в теле тикета
-                transcript = _forum_text(wi)
-                lang = ""
+            # Транскрипт/текст УЖЕ лежит в теле воркайтема — subs-fetch (видео) и
+            # краул (форум) его туда положили. Читаем ОТТУДА и сразу в ЛЛМ, БЕЗ
+            # перефетча ютуба (он и лишний, и поднимал sync-playwright -> конфликт
+            # event loop с браузерным Qwen). Один источник для видео и форумов.
+            transcript = _material_from_body(wi)
+            if not transcript:
+                ado.set_state(wi_id, "failed",
+                              comment="нет транскрипта в теле тикета (subs-fetch не отработал?)")
+                print(f"  #{wi_id} {vid}: нет материала в теле -> failed")
+                continue
+            if is_forum:
                 source = Source(type="forum", url=url, video_id=vid, lang="",
                                 title=title.split("]", 1)[-1].strip(),
                                 channel=urlparse(url).hostname or "forum")
-            else:                              # видео — транскрипт из R2 / провайдеров
-                got = load_lines(vid)
-                if got is None:
-                    tr = transcript_for_item(url, vid)
-                    got = (tr.lang, tr.lines)
-                lang, lines = got
-                transcript = to_prompt_text(lines)
+            else:
                 src_type = "carcarekiosk" if "carcarekiosk.com" in url else "youtube"
-                source = Source(type=src_type, url=url, video_id=vid, lang=lang,
+                source = Source(type=src_type, url=url, video_id=vid, lang="",
                                 title=title.split("]", 1)[-1].strip())
             case = distill(transcript, source)
-            case.lang = case.lang or lang
             append_jsonl(case)
             key = archive_blob(f"cases/{vid}.json", case.model_dump_json())
             state = "distilled" if not case.off_topic else "offtopic"
@@ -114,6 +100,24 @@ def main() -> None:
         except Exception as e:  # noqa: BLE001
             ado.set_state(wi_id, "failed", comment=f"distill error: {str(e)[:150]}")
             print(f"  #{wi_id} {vid}: FAIL {str(e)[:150]}")
+    return processed
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--batch", type=int, default=20)
+    ap.add_argument("--partition", choices=["even", "odd", "solo"],
+                    default=os.getenv("PARTITION") or None)
+    args = ap.parse_args()
+    if args.partition == "solo":
+        args.partition = None
+    worker = f"distill-{args.partition or os.getenv('CI_ACCOUNT', 'solo')}"
+
+    # ci_budget (лимит CI-минут) — только для облачных прогонов; локально комп свой,
+    # минуты не жжём, поэтому гард здесь не применяем (был рудимент от CI-версии).
+
+    ado = AdoClient()
+    distill_batch(ado, args.batch, args.partition, worker)
 
 
 if __name__ == "__main__":
