@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -54,7 +55,53 @@ def audio_from_url(media_url: str, max_minutes: int = 15) -> Path:
     return out
 
 
+# CF Whisper режет большие тела: 2.87МБ (16 мин) -> 413 Payload Too Large,
+# 879КБ (5 мин) -> 200 OK. Поэтому длинное аудио режем на куски по CF_CHUNK_SEC
+# и склеиваем со сдвигом таймкодов. 5 мин при 16кГц моно ≈ 0.9МБ — с запасом.
+CF_CHUNK_SEC = int(os.getenv("CF_CHUNK_SEC", "300"))
+_CF_MAX_BYTES = int(os.getenv("CF_MAX_BYTES", str(1_000_000)))
+
+
+def _audio_duration(audio: Path) -> float:
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1", str(audio)],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        return float((p.stdout or "0").strip())
+    except ValueError:
+        return 0.0
+
+
 def _cloudflare(audio: Path) -> list[tuple[int, str]]:
+    """Whisper на Cloudflare. Большой файл — по кускам (см. CF_CHUNK_SEC),
+    таймкоды каждого куска сдвигаются на его начало."""
+    if audio.stat().st_size <= _CF_MAX_BYTES:
+        return _cf_one(audio)
+    dur = _audio_duration(audio)
+    if not dur:
+        return _cf_one(audio)                     # длительность не узнали — как есть
+    lines: list[tuple[int, str]] = []
+    tmpdir = Path(tempfile.mkdtemp(prefix="cfchunk_"))
+    try:
+        offset = 0
+        while offset < dur:
+            part = tmpdir / f"p{offset}.mp3"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                            "-ss", str(offset), "-t", str(CF_CHUNK_SEC), "-i", str(audio),
+                            "-ar", "16000", "-ac", "1", str(part)],
+                           capture_output=True, timeout=300)
+            if part.exists() and part.stat().st_size > 1000:
+                for sec, text in _cf_one(part):
+                    lines.append((sec + offset, text))
+                part.unlink(missing_ok=True)
+            offset += CF_CHUNK_SEC
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return lines
+
+
+def _cf_one(audio: Path) -> list[tuple[int, str]]:
+    """Один POST в CF Whisper (тело должно быть в пределах лимита)."""
     if not (config.CF_ACCOUNT_ID and config.CF_API_TOKEN):
         raise RuntimeError("CF_ACCOUNT_ID/CF_API_TOKEN не заданы")
     url = (f"https://api.cloudflare.com/client/v4/accounts/"
@@ -74,15 +121,19 @@ def _cloudflare(audio: Path) -> list[tuple[int, str]]:
         bucket_start: float | None = None
         bucket: list[str] = []
         for w in words:
+            # ВАЖНО: CF отдаёт start/end иногда как null — .get(k, 0) вернёт None
+            # (ключ есть!), и арифметика падает. Нормализуем через `or 0.0`.
+            w_start = w.get("start") or 0.0
+            w_end = w.get("end") or w_start
             if bucket_start is None:
-                bucket_start = w.get("start", 0)
+                bucket_start = w_start
             bucket.append(w.get("word", ""))
-            if w.get("end", 0) - bucket_start >= 10:
+            if w_end - bucket_start >= 10:
                 lines.append((int(bucket_start), " ".join(bucket).strip()))
                 bucket_start, bucket = None, []
         if bucket:
             lines.append((int(bucket_start or 0), " ".join(bucket).strip()))
-        return lines
+        return [(s, t) for s, t in lines if t]
     return [(0, result.get("text", "").strip())]
 
 
@@ -91,6 +142,27 @@ def _local(audio: Path) -> list[tuple[int, str]]:
     model = WhisperModel(ASR_LOCAL_MODEL, device="auto", compute_type="auto")
     segments, _info = model.transcribe(str(audio), vad_filter=True)
     return [(int(s.start), s.text.strip()) for s in segments if s.text.strip()]
+
+
+def transcribe_file(audio: Path) -> list[tuple[int, str]]:
+    """ASR из УЖЕ скачанного локального аудио (YouTube-фолбэк: аудио тянет yt-dlp
+    дома, т.к. Kaggle/облако YouTube режет). Провайдеры cloudflare (free) / local
+    (faster-whisper); 'remote' пропускаем — он принимает media_url, не файл."""
+    errors = []
+    for name in ASR_PROVIDERS:
+        if name == "remote":
+            continue
+        try:
+            if name == "cloudflare":
+                return _cloudflare(audio)
+            if name == "local":
+                return _local(audio)
+            errors.append(f"{name}: unknown")
+        except ImportError:
+            errors.append(f"{name}: faster-whisper не установлен")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{name}: {str(e)[:150]}")
+    raise RuntimeError("ASR (file) недоступен: " + " | ".join(errors))
 
 
 def transcribe_url(media_url: str) -> list[tuple[int, str]]:
