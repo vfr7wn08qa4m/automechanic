@@ -52,8 +52,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: зависимости + Chromium (tubetranscript / forums-js)
+      - name: зависимости + Chromium (tubetranscript / forums-js) + ffmpeg (ASR)
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           pip install -q "yt-dlp[default,curl-cffi]" playwright -r requirements.txt
           python -m playwright install --with-deps chromium
 
@@ -89,6 +90,16 @@ jobs:
           BATCH: ${{ github.event.inputs.batch || '10' }}
           PARTITION: ${{ github.event.inputs.partition || 'solo' }}
           SUBTITLE_PROVIDERS: "tubetranscript"
+          # ASR для видео БЕЗ титров (задача asr в ci_tick):
+          #  аудио — convert1s (сторонний YouTube→MP3: тянет YouTube на СВОЁМ сервере,
+          #  поэтому датацентр-блок «Sign in to confirm you're not a bot» обходится;
+          #  yt-dlp оставлен фолбэком, но с раннера он заблокирован);
+          #  распознавание — Whisper на Cloudflare (CF_* уже заданы выше). Раннер почти
+          #  не грузится: сеть + ffmpeg; длинное аудио режется на куски по CF_CHUNK_SEC
+          #  (CF отдаёт 413 на ~2.9МБ; 5 мин ≈ 0.9МБ проходит).
+          AUDIO_PROVIDERS: "convert1s,ytdlp"
+          ASR_PROVIDERS: "cloudflare"
+          CF_CHUNK_SEC: "300"
         run: |
           echo "[workflow] GITHUB_ACTOR=$GITHUB_ACTOR"
           echo "[workflow] github.actor=${{ github.actor }}"
