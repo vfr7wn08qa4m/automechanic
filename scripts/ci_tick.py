@@ -41,6 +41,21 @@ def _has(ado, state: str) -> bool:
     return bool(ado.query_by_state(state, top=1))
 
 
+def _has_asr_backlog(ado) -> bool:
+    """Есть ли видео-брак без титров, который ещё не пробовали через ASR."""
+    try:
+        proj = ado.project.replace("'", "''")
+        q = ("SELECT [System.Id] FROM WorkItems "
+             f"WHERE [System.TeamProject] = '{proj}' AND [System.State] = 'Removed' "
+             "AND [System.Tags] CONTAINS 'auto-mech' AND [System.Tags] CONTAINS 'failed' "
+             "AND [System.Tags] NOT CONTAINS 'asr-failed' "
+             "AND [System.Title] CONTAINS 'vid:' "
+             "AND [System.Title] NOT CONTAINS 'vid:frm-'")
+        return bool(ado._wiql(q, top=1))
+    except Exception:  # noqa: BLE001 — стиринг не должен ронять тик
+        return False
+
+
 def _choose_task(ado) -> str:
     """Взвешенный рандом со стирингом: пустые стадии обнуляются."""
     weights = {
@@ -48,12 +63,15 @@ def _choose_task(ado) -> str:
         "forums":   int(os.getenv("W_FORUMS", "30")),    # forum_posts
         "delta":    int(os.getenv("W_DELTA", "20")),     # sync_youtube_channel_videos
         "embed":    int(os.getenv("W_EMBED", "10")),     # index_to_qdrant
+        "asr":      int(os.getenv("W_ASR", "15")),       # Whisper для видео БЕЗ титров
         "discover": int(os.getenv("W_DISCOVER", "5")),   # discover_youtube_channels
     }
     if not _has(ado, "new"):
         weights["subs"] = 0            # нечего транскрибировать
     if not _has(ado, "distilled"):
         weights["embed"] = 0           # нечего индексировать
+    if weights.get("asr") and not _has_asr_backlog(ado):
+        weights["asr"] = 0             # брака без титров нет — ASR не гоняем
     pool = [(t, w) for t, w in weights.items() if w > 0]
     if not pool:                        # подстраховка (не должно случаться)
         pool = [("delta", 1), ("discover", 1), ("forums", 1)]
@@ -84,6 +102,16 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
     if task == "embed":
         from scripts.embed_index_batch import embed_batch
         return embed_batch(ado, max(batch, 40), partition) > 0
+
+    if task == "asr":
+        # Видео БЕЗ титров: аудио берёт convert1s (сторонний YouTube→MP3 — тянет
+        # YouTube на СВОЁМ сервере, поэтому датацентр-блок обходится), распознаёт
+        # Whisper на Cloudflare (длинное аудио режется на куски). Раннер почти не
+        # грузится: сеть + ffmpeg. Успех -> тикет обратно в state:subs.
+        os.environ.setdefault("AUDIO_PROVIDERS", "convert1s,ytdlp")
+        os.environ.setdefault("ASR_PROVIDERS", "cloudflare")
+        from scripts.asr_backfill import backfill
+        return backfill(ado, min(batch, 5)) > 0
 
     if task == "delta":
         from pipeline.youtube_discovery import (ensure_my_channels, load_channels,
