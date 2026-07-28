@@ -144,13 +144,15 @@ def distill(transcript: str, source: Source, retries: int = 2) -> RepairCase:
         client = _client(base_url, api_key)
         for attempt in range(retries + 1):
             try:
+                # Kimi k3 требует temperature=1 (reasoning модель)
+                temp = 1.0 if "kimi" in base_url.lower() or model == "k3" else 0.2
                 resp = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": f"Video title: {source.title}\nChannel: {source.channel}\n\nTranscript:\n{transcript}"},
                     ],
-                    temperature=0.2,
+                    temperature=temp,
                     max_tokens=config.DISTILL_MAX_TOKENS,
                 )
                 raw = resp.choices[0].message.content or ""
