@@ -88,8 +88,39 @@ def _client(base_url: str, api_key: str) -> OpenAI:
                   timeout=float(config.DISTILL_TIMEOUT_SECONDS), max_retries=1)
 
 
-def _extract_json(text: str) -> dict:
-    # срезаем возможные reasoning-блоки и код-фенсы
+def healthcheck() -> tuple[bool, str]:
+    """Проверить, жив ли хотя бы один эндпоинт дистилляции.
+
+    Используется в облачном CI: перед тем как трогать очередь state:subs,
+    убеждаемся, что API-ключ/модель работают. Возвращает (ok, message).
+    """
+    try:
+        endpoints = _endpoints()
+    except RuntimeError as e:
+        return False, str(e)
+    if not endpoints:
+        return False, "no distill endpoints configured"
+
+    errors: list[str] = []
+    for base_url, api_key, model in endpoints:
+        client = _client(base_url, api_key)
+        try:
+            # лёгкий вызов: проверяем и ключ, и доступность модели
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            _ = resp.choices[0].message.content
+            return True, f"{model} @ {base_url} ok"
+        except Exception as e:  # noqa: BLE001 — каскадим к следующему эндпоинту
+            status = getattr(e, "status_code", None)
+            errors.append(f"{model}: {status or 'err'} {str(e)[:120]}")
+    return False, " | ".join(errors)
+
+
+def extract_json(text: str) -> dict:
+    """Публичная: вытаскивает JSON из ответа модели (reasoning-блоки, code-fences)."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     text = text.replace("```json", "```")
     if "```" in text:
@@ -100,6 +131,10 @@ def _extract_json(text: str) -> dict:
     if not m:
         raise ValueError(f"no JSON in model output: {text[:300]}")
     return json.loads(m.group(0))
+
+
+# обратная совместимость для внутреннего кода
+_extract_json = extract_json
 
 
 def distill(transcript: str, source: Source, retries: int = 2) -> RepairCase:
