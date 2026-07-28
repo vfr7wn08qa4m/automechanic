@@ -23,22 +23,6 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Локальный бутстрап кредов из accounts.json (опционально для локального запуска).
-# На CI переменные уже установлены из GitHub Secrets, accounts.json не требуется.
-_accounts_file = ROOT / "accounts.json"
-if _accounts_file.exists():
-    try:
-        _cfg = json.loads(_accounts_file.read_text(encoding="utf-8"))
-        _az = _cfg.get("azure") or {}
-        os.environ.setdefault("ADO_ORG", _az.get("org") or "")
-        os.environ.setdefault("ADO_PROJECT", _az.get("project") or "")
-        os.environ.setdefault("ADO_PAT", _az.get("pat") or "")
-        for _k, _v in (_cfg.get("shared_secrets") or {}).items():
-            if _v:
-                os.environ.setdefault(_k, str(_v))
-    except Exception:
-        pass  # accounts.json не найден или некорректен, используем только env
-
 from pipeline import config                                   # noqa: E402
 from pipeline.ado import AdoClient                            # noqa: E402
 from pipeline.case_schema import Source                       # noqa: E402
