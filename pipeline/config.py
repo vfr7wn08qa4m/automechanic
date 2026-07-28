@@ -34,6 +34,17 @@ DISTILL_API_KEY = _get("DISTILL_API_KEY", "NIM_API_KEY", "NVIDIA_NIM_API_KEY")
 # ВНИМАНИЕ: у моделей NIM есть EOL (410 Gone) — список сверять на build.nvidia.com
 DISTILL_MODEL = _get("DISTILL_MODEL", default="minimaxai/minimax-m2.7")
 
+# --- Kimi Code API для дистилляции -------------------------------------------
+# Это НЕ стандартный Moonshot API (api.moonshot.cn/v1), а подписная Kimi Code
+# Console: https://kimi.com/code/console. Endpoint: api.kimi.com/coding/v1.
+# Модели: k3 (reasoning, самая сильная), k3-256k, kimi-for-coding,
+# kimi-for-coding-highspeed. Ключ можно положить в kimi-config.txt в корне
+# (формат "key:sk-...") или в env KIMI_API_KEY.
+KIMI_BASE_URL = _get("KIMI_BASE_URL", default="https://api.kimi.com/coding/v1")
+KIMI_API_KEY = _get("KIMI_API_KEY")
+KIMI_MODEL = _get("KIMI_MODEL", default="k3")
+KIMI_RPM = int(_get("KIMI_RPM", default="3"))  # запросов в минуту; подстрой под Allegretto tier
+
 # --- Qwen для дистилляции (альтернатива NIM/DeepSeek) -------------------------
 # Qwen 3.8 очень хорошо справляется с диагностикой авто. Прямой API к Alibaba.
 # Использование: python scripts/local_distill_batch.py --use-qwen
