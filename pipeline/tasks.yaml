@@ -1,0 +1,58 @@
+# Пул задач кольца AutoMech
+# Каждый тик выбирает ОДНУ задачу из этого пула (взвешенный рандом)
+# Исключение: backup проверяется первым (не рандом), раз/сутки
+
+tasks:
+  # === СБОР (Collection) ===
+
+  youtube_transcripts:
+    description: "Берёт видео из state:new, добывает транскрипт+комментарии → state:subs"
+    weight: 35
+    batch: 10
+    steering: "skip if state:new is empty"
+
+  forum_posts:
+    description: "Парсит форумы (что нового), берёт посты которых нет в базе → state:subs"
+    weight: 30
+    batch: 10
+    steering: "skip if no new posts found"
+
+  sync_youtube_channel_videos:
+    description: "Проходится по известным каналам, берёт новые видео которых нет в базе"
+    weight: 20
+    batch: 10
+    steering: "run always if channels exist"
+
+  discover_youtube_channels:
+    description: "Находит НОВЫЕ YouTube каналы (SEED запросы) → создаёт Epic"
+    weight: 5
+    batch: 2
+    steering: "run always (discovery)"
+
+  # === ОБРАБОТКА (Processing) ===
+
+  distill:
+    description: "Берёт state:subs, LLM-фильтр off_topic -> RepairCase -> state:distilled/offtopic"
+    weight: 15
+    batch: 10
+    steering: "skip if state:subs is empty"
+
+  index_to_qdrant:
+    description: "Берёт state:distilled, embedding → Qdrant → state:indexed"
+    weight: 10
+    batch: 40
+    steering: "skip if state:distilled is empty"
+
+  # === СЕРВИС (не рандом) ===
+
+  # backup: "раз/сутки гард, проверяется ПЕРЕД рандомом в ci_tick.py"
+  #   Если сегодня уже был backup → пропускаем рандом
+  #   Если не был → делаем backup и завершаем тик (эстафета передаётся с worked=True)
+
+# Маппинг на функции ci_tick.py._run_task():
+#   youtube_transcripts → fetch_subs_batch()
+#   forum_posts → crawl()  [zone=CI_FORUM_ZONE]
+#   sync_youtube_channel_videos → sync_active_channels()
+#   discover_youtube_channels → discover_new_channels()  [DISCOVER_QUERIES seeds]
+#   distill → distill_batch()  (+ healthcheck перед батчем)
+#   index_to_qdrant → embed_batch()
