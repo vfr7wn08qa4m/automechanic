@@ -13,7 +13,29 @@ import re as _re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+# Бутстрап кредов из accounts.json ДО импорта pipeline.config (он читает env при
+# импорте): даёт локальный прогон эмбеддинга с дома (CF_* для Cloudflare bge-m3 +
+# QDRANT_* + ADO_*). На CI-агенте accounts.json нет — env приходит из окружения.
+_acc = ROOT / "accounts.json"
+if _acc.exists():
+    import os as _os
+    import json as _json
+    _cfg = _json.loads(_acc.read_text(encoding="utf-8"))
+    _az = _cfg.get("azure") or {}
+    if _az.get("org"):
+        _os.environ.setdefault("ADO_ORG", _az["org"])
+        _os.environ.setdefault("ADO_PROJECT", _az["project"])
+        _os.environ.setdefault("ADO_PAT", _az["pat"])
+    for _k, _v in (_cfg.get("shared_secrets") or {}).items():
+        if _v:
+            _os.environ.setdefault(_k, str(_v))
 
 from pipeline import config                          # noqa: E402
 from pipeline.ado import AdoClient                   # noqa: E402
