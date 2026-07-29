@@ -113,6 +113,38 @@ def _remote(texts: list[str], input_type: str) -> list[list[float]]:
     return r.json()["vectors"]
 
 
+def _check_cf_quota() -> tuple[bool, str]:
+    """Проверить, есть ли доступные CF токены (не исчерпана ли квота на всех)."""
+    tokens = _load_cf_tokens()
+    if not tokens:
+        return True, "no CF tokens configured, skipping quota check"
+
+    for i, token in enumerate(tokens, 1):
+        try:
+            url = (f"https://api.cloudflare.com/client/v4/accounts/"
+                   f"{config.CF_ACCOUNT_ID}/ai/run/{config.CF_EMBED_MODEL}")
+            r = requests.post(url, json={"text": ["test"]},
+                              headers={"Authorization": f"Bearer {token}"},
+                              timeout=10)
+            body = r.json()
+            # Если успешно — у этого токена есть квота
+            if body.get("success"):
+                return True, f"quota available (token {i})"
+            # Если 429 — этот токен исчерпан
+            errors = body.get("errors", [])
+            if any(e.get("code") == 10027 for e in errors):  # quota exceeded
+                continue  # пробуем следующий
+            # Другая ошибка — не понятно, может быть сеть
+            return True, f"token {i}: unclear error, assuming ok"
+        except requests.exceptions.RequestException as e:
+            if "429" in str(e):
+                continue  # этот исчерпан
+            # Сетевая ошибка, не критично
+            return True, f"token {i}: network error, assuming ok"
+    # Все токены исчерпаны
+    return False, "all CF tokens have quota exceeded (10027)"
+
+
 def embed(texts: list[str], input_type: str = "passage") -> list[list[float]]:
     """input_type: 'passage' для документов, 'query' для поисковых запросов."""
     errors = []
