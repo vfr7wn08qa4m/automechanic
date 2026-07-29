@@ -22,16 +22,29 @@ def _load_cf_accounts() -> list[tuple[str, str]]:
     """Загрузить (CF_ACCOUNT_ID, CF_API_TOKEN) пары для ротации.
 
     Порядок приоритета:
-    1. env CF_ACCOUNTS (формат: "id1|token1;id2|token2;...")
-    2. cf_tokens.txt (формат: CF_ACCOUNT_ID_N=... CF_API_TOKEN_N=...)
-    3. config (CF_ACCOUNT_ID + CF_API_TOKEN, один аккаунт)
+    1. env CF_TOKENS (формат: "id1;token1;id2;token2;...")
+    2. env CF_ACCOUNTS (формат: "id1|token1;id2|token2;...")
+    3. cf_tokens.txt (формат: CF_ACCOUNT_ID_N=... CF_API_TOKEN_N=...)
+    4. config (CF_ACCOUNT_ID + CF_API_TOKEN, один аккаунт)
     """
     import os
     from pathlib import Path
 
     accounts = []
 
-    # 1. Try env CF_ACCOUNTS (semicolon-separated pairs)
+    # 1. Try env CF_TOKENS (semicolon-separated tokens: id1;token1;id2;token2;...)
+    env_cf_tokens = os.getenv("CF_TOKENS", "").strip()
+    if env_cf_tokens:
+        tokens_list = [t.strip() for t in env_cf_tokens.split(";") if t.strip()]
+        # Pair them up: id1, token1, id2, token2, ...
+        for i in range(0, len(tokens_list) - 1, 2):
+            account_id, token = tokens_list[i], tokens_list[i + 1]
+            if account_id and token:
+                accounts.append((account_id, token))
+        if accounts:
+            return accounts
+
+    # 2. Try env CF_ACCOUNTS (semicolon-separated pairs)
     env_accounts = os.getenv("CF_ACCOUNTS", "").strip()
     if env_accounts:
         for pair in env_accounts.split(";"):
@@ -43,7 +56,7 @@ def _load_cf_accounts() -> list[tuple[str, str]]:
         if accounts:
             return accounts
 
-    # 2. Try cf_tokens.txt (переменные CF_ACCOUNT_ID_N и CF_API_TOKEN_N)
+    # 3. Try cf_tokens.txt (переменные CF_ACCOUNT_ID_N и CF_API_TOKEN_N)
     cf_file = Path(__file__).parent.parent / "cf_tokens.txt"
     if cf_file.exists():
         content = cf_file.read_text()
