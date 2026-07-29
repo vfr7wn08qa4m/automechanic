@@ -76,7 +76,19 @@ def load_case(vid: str) -> RepairCase | None:
 
 def embed_batch(ado, batch: int = 50, partition: str | None = None) -> int:
     """Разобрать батч state:distilled -> вектор -> Qdrant -> state:indexed.
-    Возвращает число проиндексированных (для idle-halt кольца)."""
+    Возвращает число проиндексированных (для idle-halt кольца).
+
+    Если вся CF квота исчерпана на ALL токенах (10027), выбрасывает ошибку
+    — батч отложится на следующий день (when RING_IDLE восстановится).
+    """
+    from pipeline.embed import _check_cf_quota
+
+    has_quota, msg = _check_cf_quota()
+    if not has_quota:
+        raise RuntimeError(f"embeddings: {msg} — отложение на следующий день")
+    if "unclear" not in msg and "network" not in msg:
+        print(f"✓ {msg}")
+
     ids = ado.query_by_state("distilled", top=batch, partition=partition)
     print(f"work items в state:distilled: {len(ids)}")
 
