@@ -64,7 +64,7 @@ SITES: dict[str, ForumSite] = {
         seeds=["https://www.bimmerforums.com/forum/"],
         thread_re=r"showthread\.php\?\d+",       # vBulletin: showthread.php?2386564-title
         listing_re=r"forumdisplay\.php\?\d+",    # forumdisplay.php?12-e46
-        next_page=None,                          # пагинация vBulletin (page=N) — позже
+        next_page="{base}/page{n}",              # vBulletin: forumdisplay.php?12-e46/page2
     ),
 
     # --- ЗОНА D: EN за активным JS-челленджем Cloudflare (headless-браузер) ---
