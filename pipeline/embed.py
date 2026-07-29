@@ -18,6 +18,24 @@ from openai import OpenAI
 from . import config
 
 
+def _load_cf_tokens() -> list[str]:
+    """Загрузить CF_API_TOKEN_N из cf_tokens.txt или env."""
+    import os
+    from pathlib import Path
+    tokens = []
+    cf_file = Path(__file__).parent.parent / "cf_tokens.txt"
+    if cf_file.exists():
+        for line in cf_file.read_text().strip().split("\n"):
+            line = line.strip()
+            if "=" in line:
+                _, token = line.split("=", 1)
+                if token.strip():
+                    tokens.append(token.strip())
+    if not tokens and config.CF_API_TOKEN:
+        tokens.append(config.CF_API_TOKEN)
+    return tokens
+
+
 def _nim(texts: list[str], input_type: str) -> list[list[float]]:
     client = OpenAI(api_key=config.EMBED_API_KEY, base_url=config.EMBED_BASE_URL)
     resp = client.embeddings.create(
@@ -30,16 +48,34 @@ def _nim(texts: list[str], input_type: str) -> list[list[float]]:
 
 
 def _cloudflare(texts: list[str]) -> list[list[float]]:
+    tokens = _load_cf_tokens()
+    if not tokens:
+        raise RuntimeError("CF_API_TOKEN не найден (ни в cf_tokens.txt, ни в env)")
     url = (f"https://api.cloudflare.com/client/v4/accounts/"
            f"{config.CF_ACCOUNT_ID}/ai/run/{config.CF_EMBED_MODEL}")
-    r = requests.post(url, json={"text": texts},
-                      headers={"Authorization": f"Bearer {config.CF_API_TOKEN}"},
-                      timeout=60)
-    r.raise_for_status()
-    body = r.json()
-    if not body.get("success"):
-        raise RuntimeError(f"cloudflare ai error: {body.get('errors')}")
-    return body["result"]["data"]
+    errors = []
+    for token in tokens:
+        try:
+            r = requests.post(url, json={"text": texts},
+                              headers={"Authorization": f"Bearer {token}"},
+                              timeout=60)
+            r.raise_for_status()
+            body = r.json()
+            if not body.get("success"):
+                err = body.get("errors")
+                errors.append(f"cf error: {err}")
+                status = body.get("errors", [{}])[0].get("code")
+                if status == 10027:
+                    continue
+                raise RuntimeError(f"cloudflare ai error: {err}")
+            return body["result"]["data"]
+        except requests.exceptions.RequestException as e:
+            status = getattr(e.response, "status_code", None) if hasattr(e, "response") else None
+            errors.append(f"cf (token ...{token[-4:]}): {status or 'request error'}")
+            if status == 429:
+                continue
+            raise
+    raise RuntimeError("cloudflare: " + " | ".join(errors))
 
 
 _local_model = None
