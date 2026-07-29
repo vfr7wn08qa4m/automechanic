@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import time
@@ -46,6 +47,15 @@ COMM_ID = re.compile(r"/communities/(\d+)")             # id сообществ�
 FORUM_THREAD = re.compile(r"/communities/\d+/forum/\d+")  # тред форума клуба (Q&A-обсуждение)
 # дочерние узлы дерева каталога: модель /cars/<brand>/<model>/ и поколение .../<gen>/
 CHILD = re.compile(r'href="(/cars/[a-z0-9_-]+/[a-z0-9_-]+/(?:[a-z0-9]+/)?)"')
+# ПАГИНАЦИЯ. Страница-источник SSR-отдаёт только ~20 САМЫХ СВЕЖИХ записей, а всё
+# остальное доступно лишь по курсорной ссылке <a class="next" rel="next"
+# href="...?to=<токен>">. Классических ?page=N нет: проверено — отдаёт ту же первую
+# страницу. Без обхода курсора старые записи были не просто «потом», а НЕДОСТУПНЫ
+# в принципе: у community 241 видели 20 из 57 (65% контента мимо).
+NEXT_PAGE = re.compile(r'<a class="next" rel="next" href="([^"]+)"')
+# сколько страниц пройти за одно посещение источника: сообщества мелкие (замер:
+# 0 / 5 / 26 / 57 записей), 10 страниц исчерпывают почти любое, а бюджет тика не жрут
+D2_MAX_PAGES = int(os.getenv("DRIVE2_MAX_PAGES", "10"))
 FRONTIER_CAP = 60_000                                    # потолок описи страниц-источников
 CURSOR = config.DATA_DIR / "drive2_cursor.json"
 
@@ -99,19 +109,27 @@ def _harvest(sess: requests.Session, page_url: str) -> tuple[list[str], list[str
     (URL-записи к забору, дочерние страницы-источники). Записи двух видов:
     бортжурналы/посты `/l/ /c/` и треды форума клуба `/communities/<id>/forum/<tid>`
     (разбираются по-разному при заборе — см. _extract_record)."""
-    r = _get(sess, page_url, timeout=40)
-    if not r:
-        return [], []
     seen: set[str] = set()
     records: list[str] = []
-    for rx in (JOURNAL, FORUM_THREAD):
-        for m in rx.finditer(r.text):
-            u = f"https://{HOST}{m.group(0)}"
-            if u not in seen:
-                seen.add(u)
-                records.append(u)
-    # дочерние узлы дерева: /cars/<brand>/<model>/ и /cars/<brand>/<model>/<gen>/
-    children = {f"https://{HOST}{p}" for p in CHILD.findall(r.text)}
+    children: set[str] = set()
+    url = page_url
+    for _ in range(max(1, D2_MAX_PAGES)):
+        r = _get(sess, url, timeout=40)
+        if not r:
+            break
+        for rx in (JOURNAL, FORUM_THREAD):
+            for m in rx.finditer(r.text):
+                u = f"https://{HOST}{m.group(0)}"
+                if u not in seen:
+                    seen.add(u)
+                    records.append(u)
+        # дочерние узлы дерева: /cars/<brand>/<model>/ и /cars/<brand>/<model>/<gen>/
+        children |= {f"https://{HOST}{p}" for p in CHILD.findall(r.text)}
+        nxt = NEXT_PAGE.search(r.text)          # курсорная «следующая» (?to=<токен>)
+        if not nxt:
+            break                               # список исчерпан
+        url = f"https://{HOST}{nxt.group(1)}"
+        time.sleep(random.uniform(2, 4))        # вежливость и между страницами списка
     return records, sorted(children)
 
 
