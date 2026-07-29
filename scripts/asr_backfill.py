@@ -60,6 +60,7 @@ from pipeline.ado import AdoClient                            # noqa: E402
 from pipeline.store import archive_blob                       # noqa: E402
 from pipeline.subtitle_providers import asr_transcript        # noqa: E402
 from pipeline.subtitles import to_prompt_text                 # noqa: E402
+from pipeline.transient import is_transient                   # noqa: E402
 
 
 def _candidates(ado, batch: int) -> list[int]:
@@ -119,8 +120,14 @@ def backfill(ado, batch: int) -> int:
             ok += 1
             print(f"    ✅ #{wi_id} {vid}: {len(tr.lines)} строк -> state:subs")
         except Exception as e:  # noqa: BLE001
-            _retag(ado, wi_id, add=("asr-failed",))
-            print(f"    ✗ #{wi_id} {vid}: {str(e)[:200]}")
+            if is_transient(e):
+                # 429 у CF Whisper / временный отказ convert1s. Тег asr-failed
+                # НЕ вешаем: он навсегда выводит видео из выборки, а причина —
+                # исчерпанный на минуту бесплатный тир, а не негодное видео.
+                print(f"    ~ #{wi_id} {vid}: отложено (временно) {str(e)[:180]}")
+            else:
+                _retag(ado, wi_id, add=("asr-failed",))
+                print(f"    ✗ #{wi_id} {vid}: {str(e)[:200]}")
         time.sleep(float(config.YTDLP_SLEEP_SECONDS or 0))
     print(f"итог: {ok}/{len(ids)} видео восстановлено через ASR")
     return ok
