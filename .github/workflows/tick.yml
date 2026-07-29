@@ -53,12 +53,25 @@ jobs:
           python-version: "3.12"
 
       - name: зависимости + Chromium (tubetranscript / forums-js) + ffmpeg (ASR)
+        # Свой таймаут на шаг: apt на раннере иногда виснет намертво (реальный случай —
+        # 45 мин на install ffmpeg), и тогда джобу убивает общий timeout-minutes ДО
+        # ring_handoff, то есть падает вся эстафета, а не один тик. Здесь шаг умрёт
+        # за 12 мин, а тик всё равно выполнится и передаст баттон дальше.
+        timeout-minutes: 12
+        continue-on-error: true
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          if ! command -v ffmpeg >/dev/null; then
+            sudo timeout 240 apt-get update -qq || true
+            sudo timeout 420 apt-get install -y -qq ffmpeg || echo "ffmpeg не встал — ASR отвалится, остальные задачи работают"
+          fi
           pip install -q "yt-dlp[default,curl-cffi]" playwright -r requirements.txt
           python -m playwright install --with-deps chromium
 
       - name: один тик конвейера
+        # always(): даже если шаг зависимостей упал по своему таймауту, тик обязан
+        # запуститься — ci_tick ловит ошибку задачи сам и в ЛЮБОМ случае зовёт
+        # ring_handoff. Иначе один залипший apt останавливает всё кольцо.
+        if: always()
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           CI_ACCOUNT: ${{ github.actor }}
