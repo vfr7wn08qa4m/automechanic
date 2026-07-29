@@ -18,34 +18,55 @@ from openai import OpenAI
 from . import config
 
 
-def _load_cf_tokens() -> list[str]:
-    """Загрузить CF_API_TOKEN_N из env CF_TOKENS, cf_tokens.txt или config."""
+def _load_cf_accounts() -> list[tuple[str, str]]:
+    """Загрузить (CF_ACCOUNT_ID, CF_API_TOKEN) пары для ротации.
+
+    Порядок приоритета:
+    1. env CF_ACCOUNTS (формат: "id1|token1;id2|token2;...")
+    2. cf_tokens.txt (формат: CF_ACCOUNT_ID_N=... CF_API_TOKEN_N=...)
+    3. config (CF_ACCOUNT_ID + CF_API_TOKEN, один аккаунт)
+    """
     import os
     from pathlib import Path
-    tokens = []
 
-    # 1. Try env CF_TOKENS (semicolon-separated, для GitHub ring)
-    env_tokens = os.getenv("CF_TOKENS", "").strip()
-    if env_tokens:
-        tokens = [t.strip() for t in env_tokens.split(";") if t.strip()]
-        if tokens:
-            return tokens
+    accounts = []
 
-    # 2. Try cf_tokens.txt (для локального запуска)
+    # 1. Try env CF_ACCOUNTS (semicolon-separated pairs)
+    env_accounts = os.getenv("CF_ACCOUNTS", "").strip()
+    if env_accounts:
+        for pair in env_accounts.split(";"):
+            parts = pair.strip().split("|")
+            if len(parts) == 2:
+                account_id, token = parts[0].strip(), parts[1].strip()
+                if account_id and token:
+                    accounts.append((account_id, token))
+        if accounts:
+            return accounts
+
+    # 2. Try cf_tokens.txt (переменные CF_ACCOUNT_ID_N и CF_API_TOKEN_N)
     cf_file = Path(__file__).parent.parent / "cf_tokens.txt"
     if cf_file.exists():
-        for line in cf_file.read_text().strip().split("\n"):
-            line = line.strip()
-            if "=" in line:
-                _, token = line.split("=", 1)
-                if token.strip():
-                    tokens.append(token.strip())
+        content = cf_file.read_text()
+        i = 1
+        while True:
+            account_id = None
+            token = None
+            for line in content.split("\n"):
+                if line.startswith(f"CF_ACCOUNT_ID_{i}="):
+                    account_id = line.split("=", 1)[1].strip()
+                elif line.startswith(f"CF_API_TOKEN_{i}="):
+                    token = line.split("=", 1)[1].strip()
+            if account_id and token:
+                accounts.append((account_id, token))
+                i += 1
+            else:
+                break
 
-    # 3. Fallback to config.CF_API_TOKEN
-    if not tokens and config.CF_API_TOKEN:
-        tokens.append(config.CF_API_TOKEN)
+    # 3. Fallback to config (один аккаунт)
+    if not accounts and config.CF_ACCOUNT_ID and config.CF_API_TOKEN:
+        accounts.append((config.CF_ACCOUNT_ID, config.CF_API_TOKEN))
 
-    return tokens
+    return accounts
 
 
 def _nim(texts: list[str], input_type: str) -> list[list[float]]:
@@ -60,14 +81,18 @@ def _nim(texts: list[str], input_type: str) -> list[list[float]]:
 
 
 def _cloudflare(texts: list[str]) -> list[list[float]]:
-    tokens = _load_cf_tokens()
-    if not tokens:
-        raise RuntimeError("CF_API_TOKEN не найден (ни в cf_tokens.txt, ни в env)")
-    url = (f"https://api.cloudflare.com/client/v4/accounts/"
-           f"{config.CF_ACCOUNT_ID}/ai/run/{config.CF_EMBED_MODEL}")
+    accounts = _load_cf_accounts()
+    if not accounts:
+        raise RuntimeError("CF аккаунты не найдены (ни в cf_tokens.txt, ни в env, ни в config)")
+
     errors = []
-    for token in tokens:
+    for i, (account_id, token) in enumerate(accounts, 1):
+        if not account_id or not token:
+            errors.append(f"account #{i}: не заполнены")
+            continue
+
         try:
+            url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{config.CF_EMBED_MODEL}"
             r = requests.post(url, json={"text": texts},
                               headers={"Authorization": f"Bearer {token}"},
                               timeout=60)
@@ -75,19 +100,21 @@ def _cloudflare(texts: list[str]) -> list[list[float]]:
             body = r.json()
             if not body.get("success"):
                 err = body.get("errors")
-                errors.append(f"cf error: {err}")
                 status = body.get("errors", [{}])[0].get("code")
-                if status == 10027:
+                errors.append(f"account #{i}: код {status}")
+                # 10027 = quota exceeded, 10000 = auth error → пробуем следующий
+                if status in (10027, 10000):
                     continue
                 raise RuntimeError(f"cloudflare ai error: {err}")
             return body["result"]["data"]
         except requests.exceptions.RequestException as e:
             status = getattr(e.response, "status_code", None) if hasattr(e, "response") else None
-            errors.append(f"cf (token ...{token[-4:]}): {status or 'request error'}")
-            if status == 429:
+            errors.append(f"account #{i}: HTTP {status or 'error'}")
+            # 401/429 → пробуем следующий аккаунт
+            if status in (401, 429):
                 continue
             raise
-    raise RuntimeError("cloudflare: " + " | ".join(errors))
+    raise RuntimeError("cloudflare: все аккаунты недоступны: " + " | ".join(errors))
 
 
 _local_model = None
@@ -114,35 +141,35 @@ def _remote(texts: list[str], input_type: str) -> list[list[float]]:
 
 
 def _check_cf_quota() -> tuple[bool, str]:
-    """Проверить, есть ли доступные CF токены (не исчерпана ли квота на всех)."""
-    tokens = _load_cf_tokens()
-    if not tokens:
-        return True, "no CF tokens configured, skipping quota check"
+    """Проверить, есть ли хотя бы один доступный CF аккаунт (не исчерпана ли квота на всех)."""
+    accounts = _load_cf_accounts()
+    if not accounts:
+        return True, "no CF accounts configured, skipping quota check"
 
-    for i, token in enumerate(tokens, 1):
+    for i, (account_id, token) in enumerate(accounts, 1):
+        if not account_id or not token:
+            continue  # пропускаем незаполненные слоты
+
         try:
-            url = (f"https://api.cloudflare.com/client/v4/accounts/"
-                   f"{config.CF_ACCOUNT_ID}/ai/run/{config.CF_EMBED_MODEL}")
+            url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{config.CF_EMBED_MODEL}"
             r = requests.post(url, json={"text": ["test"]},
                               headers={"Authorization": f"Bearer {token}"},
                               timeout=10)
             body = r.json()
-            # Если успешно — у этого токена есть квота
+            # Если успешно — у этого аккаунта есть квота
             if body.get("success"):
-                return True, f"quota available (token {i})"
-            # Если 429 — этот токен исчерпан
+                return True, f"quota available (account #{i})"
+            # Если 10027 — квота исчерпана
             errors = body.get("errors", [])
-            if any(e.get("code") == 10027 for e in errors):  # quota exceeded
+            if any(e.get("code") == 10027 for e in errors):
                 continue  # пробуем следующий
-            # Другая ошибка — не понятно, может быть сеть
-            return True, f"token {i}: unclear error, assuming ok"
+            # Другая ошибка (10000 auth, etc) — может быть не настроено, но не критично
+            return True, f"account #{i}: unclear status, assuming ok"
         except requests.exceptions.RequestException as e:
-            if "429" in str(e):
-                continue  # этот исчерпан
             # Сетевая ошибка, не критично
-            return True, f"token {i}: network error, assuming ok"
-    # Все токены исчерпаны
-    return False, "all CF tokens have quota exceeded (10027)"
+            continue
+    # Все аккаунты либо исчерпаны, либо незаполнены
+    return False, "all CF accounts have quota exceeded or are not configured"
 
 
 def embed(texts: list[str], input_type: str = "passage") -> list[list[float]]:
