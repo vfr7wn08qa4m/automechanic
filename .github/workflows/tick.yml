@@ -133,7 +133,7 @@ jobs:
           NEXT_GITHUB_WORKFLOW: ${{ secrets.NEXT_GITHUB_WORKFLOW }}
           # Фолбэк: настоящий размер кольца ci_trigger считает по числу токенов в
           # RING_TOKENS, чтобы это число не расходилось с реальностью при росте кольца.
-          RING_SIZE: "20"
+          RING_SIZE: "21"
           RING_IDLE: ${{ github.event.inputs.idle || '0' }}
           BATCH: ${{ github.event.inputs.batch || '10' }}
           PARTITION: ${{ github.event.inputs.partition || 'solo' }}
