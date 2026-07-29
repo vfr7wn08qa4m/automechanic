@@ -125,6 +125,7 @@ jobs:
           QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_TOKENS: ${{ secrets.CF_TOKENS }}
           BACKUP_REPO: ${{ secrets.BACKUP_REPO }}
           BACKUP_GITHUB_TOKEN: ${{ secrets.BACKUP_GITHUB_TOKEN }}
           NEXT_GITHUB_TOKEN: ${{ secrets.NEXT_GITHUB_TOKEN }}
