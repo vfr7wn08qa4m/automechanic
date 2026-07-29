@@ -42,6 +42,7 @@ from pipeline.ado import AdoClient                   # noqa: E402
 from pipeline.case_schema import RepairCase          # noqa: E402
 from pipeline.embed import embed                     # noqa: E402
 from pipeline.store import CASES_JSONL, qdrant_upsert, s3_client  # noqa: E402
+from pipeline.transient import is_transient          # noqa: E402
 
 
 def _case_from_body(wi: dict) -> RepairCase | None:
@@ -80,6 +81,7 @@ def embed_batch(ado, batch: int = 50, partition: str | None = None) -> int:
     print(f"work items в state:distilled: {len(ids)}")
 
     done = 0
+    skipped = 0
     for wi_id in ids:
         if not ado.claim(wi_id, f"embed-{partition or 'solo'}"):
             continue
@@ -96,9 +98,19 @@ def embed_batch(ado, batch: int = 50, partition: str | None = None) -> int:
             done += 1
             print(f"  #{wi_id} {vid}: indexed")
         except Exception as e:  # noqa: BLE001
+            if is_transient(e):
+                # 429/5xx/таймаут — провайдер занят, КЕЙС НЕ ВИНОВАТ. Состояние не
+                # трогаем: claim — это лишь запись в History, айтем остаётся в
+                # state:distilled и его возьмёт следующий тик. Без этого свободный
+                # тир Cloudflare (429) хоронит готовые кейсы пачками, как уже было.
+                skipped += 1
+                print(f"  #{wi_id} {vid}: ОТЛОЖЕН (временная ошибка) {str(e)[:120]}")
+                continue
             ado.set_state(wi_id, "failed", comment=f"embed error: {e}")
             print(f"  #{wi_id} {vid}: FAIL {e}")
 
+    if skipped:
+        print(f"отложено из-за временных ошибок провайдера: {skipped}")
     print(f"итог: проиндексировано {done}/{len(ids)}")
     return done
 
