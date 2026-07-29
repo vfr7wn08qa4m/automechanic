@@ -243,7 +243,11 @@ def ring_handoff(flow: str, *, worked: bool, partition: str | None = None,
     print(f"[ring] can_ring()={can_ring()}")
 
     if can_ring():
-        size = _int_env("RING_SIZE", 8)
+        # Размер кольца берём из ФАКТИЧЕСКОГО числа токенов, а RING_SIZE оставляем
+        # лишь запасным вариантом. Иначе он тихо расходится с реальностью при
+        # добавлении узлов (было: 20 аккаунтов при RING_SIZE=19 — кольцо вставало
+        # на узел раньше, чем успевало обойти всех, и «полный пустой круг» врал).
+        size = len(_load_ring_tokens()) or _int_env("RING_SIZE", 8)
         next_idle = 0 if worked else _int_env("RING_IDLE", 0) + 1
         print(f"[ring] size={size}, next_idle={next_idle} (RING_IDLE={_int_env('RING_IDLE', 0)})")
         if size and next_idle >= size:
