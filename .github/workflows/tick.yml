@@ -101,6 +101,11 @@ jobs:
           BATCH: ${{ github.event.inputs.batch || '10' }}
           PARTITION: ${{ github.event.inputs.partition || 'solo' }}
           SUBTITLE_PROVIDERS: "tubetranscript"
+          # Перекос пула: в state:subs скопилось 20000+, а дистиллировано ~900 —
+          # узкое место именно дистилляция, а subs с весом 35 эту очередь только
+          # раздувал. Меняем местами: сначала переварить накопленное.
+          W_DISTILL: "40"
+          W_SUBS: "15"
           # ASR для видео БЕЗ титров (задача asr в ci_tick):
           #  аудио — convert1s (сторонний YouTube→MP3: тянет YouTube на СВОЁМ сервере,
           #  поэтому датацентр-блок «Sign in to confirm you're not a bot» обходится;
