@@ -201,7 +201,10 @@ def trigger(flow: str, *, partition: str | None = None, zone: str | None = None,
     if not next_token:
         print("[ring] FAIL: _get_next_token() returned None - no next token?")
         return None
-    print(f"[ring] OK: next_token found ({next_token[:12]}...)")
+    # НЕ печатаем сам токен даже куском: логи GitHub Actions видны всем, у кого
+    # доступ к репо, а маскировка ***-ом работает только для значений из secrets —
+    # токен приходит из RING_TOKENS распарсенным, и раннер его не маскирует.
+    print(f"[ring] OK: next_token found (длина {len(next_token)})")
 
     next_user = _get_user_for_token(next_token)
     if not next_user:
