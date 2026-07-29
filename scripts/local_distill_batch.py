@@ -29,6 +29,7 @@ from pipeline.case_schema import Source                       # noqa: E402
 from pipeline.distill import distill                          # noqa: E402
 from pipeline.store import append_jsonl, archive_blob        # noqa: E402
 from pipeline.tools import _material_from_body               # noqa: E402
+from pipeline.transient import is_transient                 # noqa: E402
 
 
 def distill_batch(ado, batch: int, partition: str | None,
@@ -85,6 +86,13 @@ def distill_batch(ado, batch: int, partition: str | None,
                           link=f"s3://{config.S3_BUCKET}/{key}" if key else "")
             print(f"  #{wi_id} {vid}: {state} ({case.system})")
         except Exception as e:  # noqa: BLE001
+            if is_transient(e):
+                # 429/5xx/таймаут/битый ответ провайдера — материал НЕ виноват.
+                # Состояние не трогаем: тикет остаётся в state:subs и его возьмёт
+                # следующий тик. Иначе один сломанный параметр API (как 400
+                # «invalid temperature» у k3) выкашивает очередь пачками.
+                print(f"  #{wi_id} {vid}: ОТЛОЖЕН (временная ошибка) {str(e)[:150]}")
+                continue
             ado.set_state(wi_id, "failed", comment=f"distill error: {str(e)[:150]}")
             print(f"  #{wi_id} {vid}: FAIL {str(e)[:150]}")
     return processed
