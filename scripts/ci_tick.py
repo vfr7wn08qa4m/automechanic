@@ -76,6 +76,13 @@ def _choose_task(ado) -> str:
     if not _has(ado, "distilled"):
         weights["embed"] = 0           # нечего индексировать
     if weights.get("asr") and not _has_asr_backlog(ado):
+        weights["asr"] = 0
+    # ASR УСТУПАЕТ ЭМБЕДДИНГУ. Whisper и bge-m3 живут на ОДНОМ аккаунте Cloudflare,
+    # у которого 10 000 нейронов в сутки на всё кольцо, и Whisper дороже на порядки.
+    # Пока в state:distilled есть готовые кейсы, тратить квоту на распознавание нельзя:
+    # 2026-07-29 из-за этого за сутки не векторизовалось НИ ОДНОГО кейса (CF 429).
+    # ASR — обогащение, эмбеддинг — конечный продукт конвейера.
+    if weights.get("asr") and _has(ado, "distilled"):
         weights["asr"] = 0             # брака без титров нет — ASR не гоняем
     pool = [(t, w) for t, w in weights.items() if w > 0]
     if not pool:                        # подстраховка (не должно случаться)
