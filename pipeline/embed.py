@@ -19,10 +19,19 @@ from . import config
 
 
 def _load_cf_tokens() -> list[str]:
-    """Загрузить CF_API_TOKEN_N из cf_tokens.txt или env."""
+    """Загрузить CF_API_TOKEN_N из env CF_TOKENS, cf_tokens.txt или config."""
     import os
     from pathlib import Path
     tokens = []
+
+    # 1. Try env CF_TOKENS (semicolon-separated, для GitHub ring)
+    env_tokens = os.getenv("CF_TOKENS", "").strip()
+    if env_tokens:
+        tokens = [t.strip() for t in env_tokens.split(";") if t.strip()]
+        if tokens:
+            return tokens
+
+    # 2. Try cf_tokens.txt (для локального запуска)
     cf_file = Path(__file__).parent.parent / "cf_tokens.txt"
     if cf_file.exists():
         for line in cf_file.read_text().strip().split("\n"):
@@ -31,8 +40,11 @@ def _load_cf_tokens() -> list[str]:
                 _, token = line.split("=", 1)
                 if token.strip():
                     tokens.append(token.strip())
+
+    # 3. Fallback to config.CF_API_TOKEN
     if not tokens and config.CF_API_TOKEN:
         tokens.append(config.CF_API_TOKEN)
+
     return tokens
 
 
