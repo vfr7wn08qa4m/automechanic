@@ -63,7 +63,7 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def _endpoints() -> list[tuple[str, str, str]]:
-    """Каскад (base_url, api_key, model). Без DISTILL_ENDPOINTS — один основной."""
+    """Каскад (base_url, api_key, model). По умолчанию используем ТОЛЬКО Kimi."""
     import os
     if config.DISTILL_ENDPOINTS:
         out = []
@@ -77,9 +77,10 @@ def _endpoints() -> list[tuple[str, str, str]]:
                 out.append((base_url, key, model))
         if out:
             return out
-    if not config.DISTILL_API_KEY:
-        raise RuntimeError("DISTILL_API_KEY / NIM_API_KEY не задан (см. .env.example)")
-    return [(config.DISTILL_BASE_URL, config.DISTILL_API_KEY, config.DISTILL_MODEL)]
+    # Kimi — основной, не используем NIM/другие API
+    if not config.KIMI_API_KEY:
+        raise RuntimeError("KIMI_API_KEY не задан (требуется подписка https://kimi.com/code/console)")
+    return [(config.KIMI_BASE_URL, config.KIMI_API_KEY, config.KIMI_MODEL)]
 
 
 def _client(base_url: str, api_key: str) -> OpenAI:
