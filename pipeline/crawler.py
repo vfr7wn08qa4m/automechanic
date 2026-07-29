@@ -24,6 +24,7 @@ import gzip
 import hashlib
 import html
 import json
+import os
 import re
 import time
 from urllib.parse import quote, urljoin, urlparse
@@ -41,10 +42,26 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
       "Accept-Language": "en-US,en;q=0.9,ru;q=0.8"}
 FRONTIER_PREFIX = "crawl"
+# докуда листать раздел форума вглубь (страховка от разделов, которые отдают одно
+# и то же на любой /pageN); при 30-40 тредах на странице это ~2000 тем с раздела
+LISTING_MAX_PAGES = int(os.getenv("LISTING_MAX_PAGES", "50"))
 
 
 def thread_uid(url: str) -> str:
     return "frm-" + hashlib.sha1(url.encode()).hexdigest()[:12]
+
+
+def _sanitize_title(title: str, max_len: int = 200) -> str:
+    """Удалить спецсимволы которые ADO не принимает в System.Title.
+    ADO ошибка TF401325: Value for field 'System.Title' has invalid characters."""
+    # Удалить контрольные символы и опасные для ADO символы
+    title = re.sub(r'[\x00-\x1f\x7f]', '', title)  # контрольные символы
+    title = title.replace('"', "'")  # кавычки -> апострофы
+    title = title.replace('\n', ' ')  # переводы строк -> пробелы
+    title = title.replace('\r', '')
+    # Удалить лишние пробелы
+    title = ' '.join(title.split())
+    return title[:max_len].strip()
 
 
 def _fetch(sess: requests.Session, url: str, timeout: int = 30):
@@ -221,15 +238,27 @@ def parse_listing(url: str, html: str, site: ForumSite) -> tuple[list[str], list
             listings.append(full.split("#")[0])
     # следующая страница текущего листинга
     if site.next_page:
-        base = url.split("/page")[0].split("?")[0].rstrip("/")
-        m = re.search(r"/page/?(\d+)", url) or re.search(r"page-(\d+)", url) \
-            or re.search(r"page=(\d+)", url)
+        if site.engine == "vbulletin":
+            # vBulletin держит id раздела В ЗАПРОСЕ: forumdisplay.php?12-e46, а
+            # страницы дописывает ПОСЛЕ него: forumdisplay.php?12-e46/page2.
+            # Общая ветка ниже режет строку по "?" и потеряла бы id — отсюда и
+            # стоял next_page=None, из-за чего с bimmerforums годами забиралась
+            # только первая страница каждого раздела.
+            base = re.sub(r"/page\d+/?$", "", url.split("#")[0].rstrip("/"))
+            m = re.search(r"/page(\d+)/?$", url)
+        else:
+            base = url.split("/page")[0].split("?")[0].rstrip("/")
+            m = re.search(r"/page/?(\d+)", url) or re.search(r"page-(\d+)", url) \
+                or re.search(r"page=(\d+)", url)
         cur = int(m.group(1)) if m else 1
         nxt = site.next_page.format(base=base + ("/" if site.host.endswith(".com")
                                                  and "xenforo" in site.engine else ""),
                                     n=cur + 1)
-        # добавляем след. страницу, только если на текущей были треды
-        if threads:
+        # Следующую страницу добавляем, только если на текущей были треды И мы не
+        # ушли слишком глубоко. Потолок нужен из-за разделов-контейнеров: они на
+        # любой /pageN отдают одно и то же (проверено на bimmerforums Classifieds —
+        # 6 тех же тредов на стр. 2,3,4), и без ограничения фронтир пух бы вечно.
+        if threads and cur < LISTING_MAX_PAGES:
             listings.append(urljoin(url, nxt))
     return list(dict.fromkeys(threads)), list(dict.fromkeys(listings))
 
@@ -309,6 +338,7 @@ def crawl(zone: str, minutes: float, create_workitems: bool,
                     continue
                 m = re.search(r"<title[^>]*>(.*?)</title>", html, re.DOTALL | re.I)
                 title = (m.group(1).strip() if m else url)[:200]
+                title = _sanitize_title(title)  # удалить спецсимволы для ADO
                 _archive_and_ticket(url, title, posts, site, ado, shard_cache, stats)
                 seen.add(uid)
                 stats["threads"] += 1
