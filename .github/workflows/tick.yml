@@ -161,7 +161,14 @@ jobs:
           #  (CF отдаёт 413 на ~2.9МБ; 5 мин ≈ 0.9МБ проходит).
           AUDIO_PROVIDERS: "convert1s,rapidapi"
           RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
-          ASR_PROVIDERS: "cloudflare"
+          #  Распознавание: cloudflare -> local. CF дешевле по минутам раннера, но
+          #  10k нейронов/сутки на аккаунт и квота ОБЩАЯ с эмбеддингом; ротация по
+          #  CF_TOKENS есть теперь и в asr.py. Когда все CF-аккаунты в 429 —
+          #  faster-whisper прямо НА РАННЕРЕ: квоту не тратит, платим минутами.
+          #  faster-whisper ставится по требованию (ci_tick._ensure_faster_whisper),
+          #  чтобы не тормозить каждый тик 30-мегабайтным ctranslate2.
+          ASR_PROVIDERS: "cloudflare,local"
+          ASR_LOCAL_MODEL: "base"
           CF_CHUNK_SEC: "300"
         run: |
           echo "[workflow] GITHUB_ACTOR=$GITHUB_ACTOR"
