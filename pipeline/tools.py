@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from . import config
-from .ado import AdoClient
+from .ado import AdoClient, is_youtube_vid
 from .case_schema import RepairCase
 from .store import append_jsonl, archive_blob
 
@@ -83,7 +83,11 @@ def cmd_get_material(wi_id: int) -> None:
     vid = ado.video_id_from_title(title) or ""
     url = (AdoClient.source_url(wi) or f"https://www.youtube.com/watch?v={vid}")
     material = _material_from_body(wi)
-    if not material and config.S3_ENDPOINT and not vid.startswith("frm-"):
+    # В R2 под subs/ лежат только транскрипты видео (YouTube и CarCareKiosk).
+    # Форум-треды и reddit-посты приходят текстом сразу в тело тикета, архива у них
+    # нет — проверка «не frm-» пускала сюда reddit и он зря дёргал S3.
+    if not material and config.S3_ENDPOINT and (is_youtube_vid(vid)
+                                                or vid.startswith("cck-")):
         material = _material_from_r2(vid)
     if not material:
         ado.set_state(wi_id, "failed",
