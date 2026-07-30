@@ -92,6 +92,13 @@ YTDLP_PROXY = _get("YTDLP_PROXY")
 YTDLP_COOKIES_B64 = _get("YTDLP_COOKIES_B64")
 YTDLP_VISITOR_DATA = _get("YTDLP_VISITOR_DATA")   # из HAR (X-Goog-Visitor-Id)
 
+# --- RapidAPI youtube-mp3: второй провайдер аудио под ASR ---------------------
+# Бэкенд robotilab.online. Работает с датацентра (проверено в облаке 5/5), но
+# ТОЛЬКО напрямую: через CRAWL_PROXY релей срезает x-rapidapi-key -> 401.
+# Free tier ~200 запросов/сутки. См. pipeline/audio_rapidapi.py.
+RAPIDAPI_KEY = _get("RAPIDAPI_KEY")
+RAPIDAPI_HOST = _get("RAPIDAPI_HOST", default="youtube-mp310.p.rapidapi.com")
+
 # --- Прокси форум-краула (Cloudflare Worker) ---------------------------------
 # Воркер-реле: краул ходит на сайты через него (чистый Cloudflare-edge egress +
 # браузерные заголовки -> обходит IP/базовые бот-фильтры Cloudflare-форумов).
