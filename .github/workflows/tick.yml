@@ -38,8 +38,8 @@ on:
         default: "0"
 
 concurrency:
-  group: automech-tick-${{ github.repository_owner }}-${{ github.actor }}
-  cancel-in-progress: false
+  group: automech-tick-${{ github.actor }}
+  cancel-in-progress: true
 
 jobs:
   tick:
