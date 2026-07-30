@@ -59,7 +59,10 @@ def _load_cf_accounts() -> list[tuple[str, str]]:
     # 3. Try cf_tokens.txt (переменные CF_ACCOUNT_ID_N и CF_API_TOKEN_N)
     cf_file = Path(__file__).parent.parent / "cf_tokens.txt"
     if cf_file.exists():
-        content = cf_file.read_text()
+        # encoding ОБЯЗАТЕЛЕН: без него Windows читает в cp1252 и падает с
+        # UnicodeDecodeError на русских комментариях в файле — из-за этого весь
+        # пул CF-аккаунтов локально не загружался (в Linux-кольце везло на UTF-8).
+        content = cf_file.read_text(encoding="utf-8", errors="replace")
         i = 1
         while True:
             account_id = None
