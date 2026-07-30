@@ -88,11 +88,21 @@ SITES: dict[str, ForumSite] = {
     ),
 
     # --- ЗОНА C: прочие языки / API-сайты ------------------------------------
+    # ИСПРАВЛЕНО 2026-07-30: реальная структура сайта — /{марка}/{модель}/defectos/
+    # {id}/{slug}, а НЕ /pregunta (тред такого пути на сайте не существует вообще).
+    # thread_re не совпадал НИ С ОДНОЙ страницей с первого дня — за всю историю
+    # прошёл 1 тикет. Проверено вживую (requests): /elegirmarca -> 81 марка ->
+    # /{марка}/{модель} -> /{марка}/{модель}/defectos -> до 30 тредов на модель.
+    # Первый сегмент пути ограничен ≥3 симв., чтобы не цеплять гео-варианты сайта
+    # (/mx/toyota/..., /ar/..., 2-буквенные коды стран — у брендов их не бывает).
     "opinautos.com": ForumSite(
         host="www.opinautos.com", engine="custom", lang="es", zone="c",
-        seeds=["https://www.opinautos.com/"],
-        thread_re=r"https://www\.opinautos\.com/[^/\"]+/[^/\"]+/pregunta[^\"#?]*",
-        mode="seed",
+        seeds=["https://www.opinautos.com/elegirmarca"],
+        thread_re=r"https://www\.opinautos\.com/[a-z][a-z0-9-]{2,}/[a-z0-9-]+"
+                  r"/defectos/\d+/[^\"#?]+",
+        listing_re=r"https://www\.opinautos\.com/[a-z][a-z0-9-]{2,}"
+                   r"(?:/elegirmodelo|/[a-z0-9-]+(?:/defectos)?)?$",
+        mode="crawl",
     ),
     # motor-talk.de -> отдельный GraphQL-клиент (не HTML-краул), см. sources-scan.md
     # reddit -> OAuth API-клиент; autohome.com.cn -> позже
