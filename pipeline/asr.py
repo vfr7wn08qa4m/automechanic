@@ -101,17 +101,41 @@ def _cloudflare(audio: Path) -> list[tuple[int, str]]:
 
 
 def _cf_one(audio: Path) -> list[tuple[int, str]]:
-    """Один POST в CF Whisper (тело должно быть в пределах лимита)."""
-    if not (config.CF_ACCOUNT_ID and config.CF_API_TOKEN):
+    """Один POST в CF Whisper (тело должно быть в пределах лимита).
+
+    РОТАЦИЯ АККАУНТОВ. У каждого аккаунта Cloudflare 10k нейронов в сутки на
+    ВСЁ, и Whisper дороже эмбеддинга на порядки — первый аккаунт выгорает быстро.
+    Раньше здесь был жёстко один config.CF_ACCOUNT_ID: на его 429 весь ASR-проход
+    падал, хотя в cf_tokens.txt лежат ещё аккаунты (2026-07-30 в кольце именно
+    так и встало: «cloudflare: 429 Too Many Requests» на каждом видео).
+    Теперь берём тот же пул, что и эмбеддинг (embed._load_cf_accounts), и на
+    401/429 идём к следующему аккаунту.
+    """
+    from .embed import _load_cf_accounts
+    accounts = _load_cf_accounts()
+    if not accounts:
         raise RuntimeError("CF_ACCOUNT_ID/CF_API_TOKEN не заданы")
-    url = (f"https://api.cloudflare.com/client/v4/accounts/"
-           f"{config.CF_ACCOUNT_ID}/ai/run/@cf/openai/whisper")
-    r = requests.post(url, data=audio.read_bytes(),
-                      headers={"Authorization": f"Bearer {config.CF_API_TOKEN}",
-                               "Content-Type": "application/octet-stream"},
-                      timeout=300)
-    r.raise_for_status()
-    body = r.json()
+
+    errors: list[str] = []
+    body = None
+    for idx, (acc_id, token) in enumerate(accounts, 1):
+        url = (f"https://api.cloudflare.com/client/v4/accounts/"
+               f"{acc_id}/ai/run/@cf/openai/whisper")
+        r = requests.post(url, data=audio.read_bytes(),
+                          headers={"Authorization": f"Bearer {token}",
+                                   "Content-Type": "application/octet-stream"},
+                          timeout=300)
+        if r.status_code in (401, 429):
+            errors.append(f"аккаунт #{idx}: HTTP {r.status_code}")
+            print(f"[asr] CF аккаунт #{idx}/{len(accounts)}: HTTP {r.status_code}"
+                  f" — пробую следующий")
+            continue
+        r.raise_for_status()
+        body = r.json()
+        break
+    if body is None:
+        raise RuntimeError("cf whisper: все аккаунты исчерпаны ("
+                           + ", ".join(errors) + ")")
     if not body.get("success"):
         raise RuntimeError(f"cf whisper error: {body.get('errors')}")
     result = body["result"]
