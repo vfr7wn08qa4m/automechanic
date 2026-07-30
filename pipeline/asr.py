@@ -261,6 +261,48 @@ def _whispercpp(audio: Path) -> list[tuple[int, str]]:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# Whisper (любой бэкенд — CF, whisper.cpp, faster-whisper) на невнятном/тихом
+# куске звука иногда зацикливается: одна короткая фраза повторяется десятками
+# раз подряд ("ну, и, ну, и, ну, и..."). Замер 2026-07-30 на реальном тикете:
+# 6 таких блоков, 3.1% от 96k-символьного транскрипта, до 74 повторов в одном
+# блоке. Не безобидно — платная дистилляция потом жуёт этот мусор как реальный
+# текст. Схлопываем группу из 1-5 слов, повторённую MIN_REPEATS+ раз подряд, в
+# одно вхождение — до архивации и до тела тикета, единая точка для всех
+# провайдеров ASR.
+_LOOP_MIN_REPEATS = int(os.getenv("ASR_LOOP_MIN_REPEATS", "4"))
+_LOOP_MAX_NGRAM = 5
+
+
+def collapse_asr_loops(text: str) -> str:
+    words = text.split(" ")
+    out: list[str] = []
+    i, n = 0, len(words)
+    while i < n:
+        collapsed = False
+        for k in range(1, min(_LOOP_MAX_NGRAM, n - i) + 1):
+            chunk = words[i:i + k]
+            norm = [w.strip(",.").lower() for w in chunk]
+            if not any(norm):
+                continue
+            reps, j = 1, i + k
+            while j + k <= n and [w.strip(",.").lower() for w in words[j:j + k]] == norm:
+                reps += 1
+                j += k
+            if reps >= _LOOP_MIN_REPEATS:
+                out.extend(chunk)
+                i = j
+                collapsed = True
+                break
+        if not collapsed:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
+
+
+def _dedup_lines(lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    return [(sec, collapse_asr_loops(text)) for sec, text in lines]
+
+
 def transcribe_file(audio: Path) -> list[tuple[int, str]]:
     """ASR из УЖЕ скачанного локального аудио. Провайдеры:
     cloudflare (free, но 10k нейронов/сутки на аккаунт и квота общая с эмбеддингом;
@@ -272,11 +314,11 @@ def transcribe_file(audio: Path) -> list[tuple[int, str]]:
             continue
         try:
             if name == "cloudflare":
-                return _cloudflare(audio)
+                return _dedup_lines(_cloudflare(audio))
             if name in ("whispercpp", "whisper.cpp", "whisper_cpp"):
-                return _whispercpp(audio)
+                return _dedup_lines(_whispercpp(audio))
             if name == "local":
-                return _local(audio)
+                return _dedup_lines(_local(audio))
             errors.append(f"{name}: unknown")
         except ImportError:
             errors.append(f"{name}: faster-whisper не установлен")
@@ -296,11 +338,12 @@ def transcribe_url(media_url: str) -> list[tuple[int, str]]:
         for name in ASR_PROVIDERS:
             try:
                 if name == "remote":
-                    return _remote(media_url)
+                    return _dedup_lines(_remote(media_url))
                 if name in ("cloudflare", "local"):
                     if audio is None:
                         audio = audio_from_url(media_url)
-                    return _cloudflare(audio) if name == "cloudflare" else _local(audio)
+                    return _dedup_lines(
+                        _cloudflare(audio) if name == "cloudflare" else _local(audio))
                 errors.append(f"{name}: unknown")
             except ImportError:
                 errors.append(f"{name}: faster-whisper не установлен")
