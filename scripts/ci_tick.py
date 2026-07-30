@@ -52,7 +52,8 @@ def _has_asr_backlog(ado) -> bool:
              "AND [System.Tags] CONTAINS 'auto-mech' AND [System.Tags] CONTAINS 'failed' "
              "AND [System.Tags] NOT CONTAINS 'asr-failed' "
              "AND [System.Title] CONTAINS 'vid:' "
-             "AND [System.Title] NOT CONTAINS 'vid:frm-'")
+             "AND [System.Title] NOT CONTAINS 'vid:frm-' "
+             "AND [System.Title] NOT CONTAINS 'vid:cck-'")
         return bool(ado._wiql(q, top=1))
     except Exception:  # noqa: BLE001 — стиринг не должен ронять тик
         return False
@@ -83,7 +84,7 @@ def _choose_task(ado) -> str:
     # 2026-07-29 из-за этого за сутки не векторизовалось НИ ОДНОГО кейса (CF 429).
     # ASR — обогащение, эмбеддинг — конечный продукт конвейера.
     if weights.get("asr") and _has(ado, "distilled"):
-        weights["asr"] = 0             # брака без титров нет — ASR не гоняем
+        weights["asr"] = 0             # есть что векторизовать — квоту CF отдаём эмбеддингу
     pool = [(t, w) for t, w in weights.items() if w > 0]
     if not pool:                        # подстраховка (не должно случаться)
         pool = [("delta", 1), ("discover", 1), ("forums", 1)]
