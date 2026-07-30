@@ -142,7 +142,12 @@ def _choose_task(ado) -> str:
     # Пока в state:distilled есть готовые кейсы, тратить квоту на распознавание нельзя:
     # 2026-07-29 из-за этого за сутки не векторизовалось НИ ОДНОГО кейса (CF 429).
     # ASR — обогащение, эмбеддинг — конечный продукт конвейера.
-    if weights.get("asr") and _has(ado, "distilled"):
+    # ...но это верно ТОЛЬКО пока ASR ходит в Cloudflare. С whisper.cpp на раннере
+    # распознавание не трогает квоту CF вовсе, и морить ASR голодом больше незачем
+    # (проверено в кольце 2026-07-30: whisper.cpp дал 33 строки без единого нейрона CF).
+    _asr_uses_cf_only = "whispercpp" not in os.getenv(
+        "ASR_PROVIDERS", "cloudflare,whispercpp")
+    if weights.get("asr") and _asr_uses_cf_only and _has(ado, "distilled"):
         weights["asr"] = 0             # есть что векторизовать — квоту CF отдаём эмбеддингу
     pool = [(t, w) for t, w in weights.items() if w > 0]
     if not pool:                        # подстраховка (не должно случаться)
