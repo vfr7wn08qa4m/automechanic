@@ -192,7 +192,12 @@ def load_state(zone: str) -> dict:
 def save_state(zone: str, state: dict) -> None:
     state = {"frontier": state.get("frontier", [])[:_FRONTIER_CAP],
              "seen": state.get("seen", [])[-_SEEN_CAP:],
-             "listing_seen": state.get("listing_seen", [])[-_FRONTIER_CAP:]}
+             "listing_seen": state.get("listing_seen", [])[-_FRONTIER_CAP:],
+             # без этого поля throttle в seed_frontier бесполезен: при каждой
+             # загрузке last_refresh читался бы как 0 (значение по умолчанию) и
+             # ре-визит срабатывал бы на КАЖДОМ холостом запуске, а не раз в
+             # LISTING_REFRESH_HOURS.
+             "last_refresh": state.get("last_refresh", 0)}
     payload = json.dumps(state, ensure_ascii=False)
     (config.DATA_DIR / f"crawl_{zone}.json").write_text(payload, encoding="utf-8")
     if config.S3_ENDPOINT:
@@ -207,14 +212,63 @@ def save_state(zone: str, state: dict) -> None:
             pass
 
 
+# Насколько редко ре-визитить исчерпанный фронтир (часы). Не при каждом холостом
+# запуске — иначе долбим форум без пользы между появлением новых тредов.
+LISTING_REFRESH_HOURS = float(os.getenv("LISTING_REFRESH_HOURS", "6"))
+
+# Суффикс пагинации у разных движков: /page/2/ (IPS), /page2 (vBulletin: ...&s=...
+# уже срезан), page-2 (XenForo), ?page=2. "Первая страница" — это URL БЕЗ такого
+# суффикса, то есть исходный адрес раздела/подфорума.
+_PAGE_SUFFIX_RE = re.compile(r"(?:/page/?\d+/?|page-\d+/?|[?&]page=\d+)$", re.I)
+
+
+def _is_first_page(url: str) -> bool:
+    return not _PAGE_SUFFIX_RE.search(url.rstrip("/"))
+
+
 def seed_frontier(state: dict, sites: list[ForumSite]) -> None:
-    """Досеять стартовые URL, если фронтир пуст (первый прогон зоны)."""
+    """Заполнить фронтир, когда он пуст.
+
+    Первый прогон зоны (seen/listing_seen тоже пусты) — просто сеем стартовые URL.
+
+    БАГ, который это чинит: как только фронтир полностью исчерпывался (весь
+    доступный на тот момент контент обойден), для зоны D (vwvortex) единственным
+    кандидатом на пересев оставался тот же самый seed-URL раздела — а он уже лежал
+    в listing_seen с первого прогона. Итог: каждый следующий запуск мгновенно
+    пропускал этот URL («уже видели») и завершался с 0 тредов/листингов НАВСЕГДА,
+    хотя форум продолжал жить и накапливать новые темы (зона стояла минимум с
+    2026-07-22 — 4104 тикета, ни одного нового). Дыра ждала и зону B: рано или
+    поздно её фронтир тоже иссякнет тем же образом.
+
+    Форумы не статичны — на первых страницах разделов появляются новые треды.
+    Поэтому при исчерпании фронтира снимаем отметку "уже видели" с ПЕРВЫХ страниц
+    разделов (не с глубокой пагинации — та историческая, её незачем перечитывать)
+    и отправляем их на повторный обход. Не чаще LISTING_REFRESH_HOURS, чтобы не
+    хлестать форум попусту между появлением нового контента.
+    """
     if state["frontier"]:
         return
-    for site in sites:
-        kind = "thread" if site.mode == "seed" else "listing"
-        for url in site.seeds:
-            state["frontier"].append([url, kind])
+    if not state.get("seen") and not state.get("listing_seen"):
+        for site in sites:
+            kind = "thread" if site.mode == "seed" else "listing"
+            for url in site.seeds:
+                state["frontier"].append([url, kind])
+        return
+
+    now = time.time()
+    if now - state.get("last_refresh", 0) < LISTING_REFRESH_HOURS * 3600:
+        return
+    listing_seen = state.get("listing_seen", [])
+    first_pages = [u for u in listing_seen if _is_first_page(u)]
+    if not first_pages:
+        return
+    keep = set(listing_seen) - set(first_pages)
+    state["listing_seen"] = list(keep)
+    for u in first_pages:
+        state["frontier"].append([u, "listing"])
+    state["last_refresh"] = now
+    print(f"  фронтир исчерпан -> ре-визит {len(first_pages)} первых страниц "
+          f"разделов (новые темы с прошлого обхода)")
 
 
 # --- разбор страниц ------------------------------------------------------------
