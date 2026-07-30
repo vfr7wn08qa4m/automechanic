@@ -59,25 +59,62 @@ def _has_asr_backlog(ado) -> bool:
         return False
 
 
-def _ensure_faster_whisper() -> bool:
-    """Доставить faster-whisper ТОЛЬКО когда реально дошли до ASR-задачи.
+def _ensure_whispercpp() -> bool:
+    """Собрать whisper.cpp и скачать ggml-модель ТОЛЬКО когда дошли до ASR-задачи.
 
-    В общий pip install воркфлоу его не кладём: ctranslate2 тянет ~30МБ и это
-    замедляло бы КАЖДЫЙ тик, хотя asr выпадает редко. Ставим по требованию.
+    В общий pip/apt воркфлоу это не кладём: сборка ~1-2 мин, а задача asr выпадает
+    редко — тормозить каждый тик незачем. Раннер между джобами не сохраняется,
+    поэтому собираем в рабочей копии и переиспользуем в пределах джоба.
+
+    Зачем вообще: у Cloudflare 10k нейронов/сутки на аккаунт и квота ОБЩАЯ с
+    эмбеддингом, Whisper выжигает её первым (2026-07-30 ASR встал на 429 по всему
+    кольцу). whisper.cpp — CPU-бинарник без квот, платим только минутами GitHub.
     """
-    try:
-        import faster_whisper  # noqa: F401
-        return True
-    except ImportError:
-        pass
     import subprocess
-    print("[tick] ставлю faster-whisper для локального Whisper на раннере...")
-    p = subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                        "faster-whisper"], capture_output=True, text=True,
-                       timeout=600)
-    if p.returncode != 0:
-        print(f"[tick] не удалось поставить faster-whisper: {p.stderr[-300:]}")
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    repo = root / "whisper.cpp"
+    model_name = os.getenv("ASR_LOCAL_MODEL", "base")
+    binary = repo / "build" / "bin" / "whisper-cli"
+    model = repo / "models" / f"ggml-{model_name}.bin"
+    if binary.exists() and model.exists():
+        os.environ.setdefault("WHISPER_CPP_BIN", str(binary))
+        os.environ.setdefault("WHISPER_CPP_MODEL", str(model))
+        return True
+
+    try:
+        if not repo.exists():
+            print("[tick] клонирую whisper.cpp...")
+            subprocess.run(["git", "clone", "--depth", "1",
+                            "https://github.com/ggml-org/whisper.cpp", str(repo)],
+                           check=True, capture_output=True, text=True, timeout=300)
+        if not binary.exists():
+            print("[tick] собираю whisper.cpp (cmake, ~1-2 мин)...")
+            subprocess.run(["cmake", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+                           cwd=repo, check=True, capture_output=True, text=True,
+                           timeout=900)
+            subprocess.run(["cmake", "--build", "build", "-j", "--config", "Release"],
+                           cwd=repo, check=True, capture_output=True, text=True,
+                           timeout=1800)
+        if not model.exists():
+            print(f"[tick] скачиваю ggml-модель {model_name}...")
+            subprocess.run(["bash", "./models/download-ggml-model.sh", model_name],
+                           cwd=repo, check=True, capture_output=True, text=True,
+                           timeout=900)
+    except subprocess.CalledProcessError as e:
+        print(f"[tick] whisper.cpp не собрался: {(e.stderr or '')[-400:]}")
         return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[tick] whisper.cpp: {type(e).__name__} {str(e)[:200]}")
+        return False
+
+    if not (binary.exists() and model.exists()):
+        print("[tick] whisper.cpp: бинарь/модель так и не появились")
+        return False
+    os.environ["WHISPER_CPP_BIN"] = str(binary)
+    os.environ["WHISPER_CPP_MODEL"] = str(model)
+    print(f"[tick] whisper.cpp готов: {binary.name} + ggml-{model_name}.bin")
     return True
 
 
@@ -160,10 +197,10 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
         # 2026-07-30: ASR встал именно на «cloudflare: 429» — локальный Whisper
         # снимает этот потолок, поэтому он вторым в цепочке.
         os.environ.setdefault("AUDIO_PROVIDERS", "convert1s,rapidapi")
-        os.environ.setdefault("ASR_PROVIDERS", "cloudflare,local")
+        os.environ.setdefault("ASR_PROVIDERS", "cloudflare,whispercpp")
         os.environ.setdefault("ASR_LOCAL_MODEL", "base")
-        if "local" in os.environ["ASR_PROVIDERS"]:
-            _ensure_faster_whisper()
+        if "whispercpp" in os.environ["ASR_PROVIDERS"]:
+            _ensure_whispercpp()
         from scripts.asr_backfill import backfill
         return backfill(ado, min(batch, 5)) > 0
 
