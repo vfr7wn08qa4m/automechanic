@@ -16,6 +16,7 @@ offtopic) маппятся на реальный System.State через STATE_M
 from __future__ import annotations
 
 import base64
+import json
 import re
 
 import requests
@@ -412,6 +413,84 @@ class AdoClient:
         wid = self.crawl_state_item(zone, create=True)
         self._patch(wid, [{"op": "add", "path": "/fields/System.Description",
                            "value": blob_b64}])
+
+    # --- глобальный замок эстафеты (кольцо GitHub Actions) ------------------------
+    # ЗАЧЕМ. Каждый ручной workflow_dispatch на tick.yml запускает СВОЮ, независимую
+    # эстафету: ring_handoff в конце тика дёргает следующий аккаунт по API, не
+    # проверяя, бежит ли уже где-то ДРУГАЯ эстафета. concurrency: в workflow не
+    # спасает — она держит один прогон только ВНУТРИ одного репозитория, а тут 22
+    # разных репозитория. 2026-07-30: несколько ручных тестовых запусков за день
+    # породили несколько параллельных цепочек, кольцо крутило 3-4 сканера разом.
+    # Замок общий на ВСЁ кольцо (ADO shared, те же креды на всех 22 аккаунтах) —
+    # захват атомарный по System.Rev (как claim()). Просроченный (RING_LOCK_TTL_MIN)
+    # замок можно перехватить — страховка на случай, если раннер умер, не освободив.
+    RING_LOCK_TTL_MIN = 55   # > timeout-minutes джобы (45) + запас на диспетчеризацию
+
+    def _ring_lock_item(self, create: bool = True) -> int | None:
+        marker = "automech-ring-lock"
+        wid = self._find_marker(f"[{marker}]")
+        if wid or not create:
+            return wid
+        ops = [{"op": "add", "path": "/fields/System.Title",
+                "value": f"[{marker}] эстафета кольца — общий замок"},
+               {"op": "add", "path": "/fields/System.Tags", "value": "automech-ring-lock"}]
+        return self._create(config.ADO_BUDGET_TYPE, ops)
+
+    @staticmethod
+    def _lock_state_read(wi: dict) -> dict:
+        """System.Description — rich-text поле: ADO HTML-экранирует кавычки при
+        чтении (" -> &quot;), поэтому json.loads на сырой строке ломался ВСЕГДА,
+        except тихо превращал результат в {} — проверка «занято ли» была мертва,
+        замок захватывал кто угодно в любой момент. base64 не содержит кавычек/
+        HTML-спецсимволов вовсе (тот же приём уже в crawl_state_read/write) —
+        поэтому храним состояние в нём, а не сырым JSON."""
+        raw = wi["fields"].get("System.Description", "") or ""
+        try:
+            return json.loads(base64.b64decode(raw.strip()).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+
+    @staticmethod
+    def _lock_state_write(state: dict) -> str:
+        return base64.b64encode(json.dumps(state).encode("utf-8")).decode("ascii")
+
+    def ring_lock_acquire(self, holder: str) -> bool:
+        """Захватить замок эстафеты. False — уже держит другой (свежий) прогон."""
+        import time as _time
+        wid = self._ring_lock_item(create=True)
+        if not wid:
+            return True   # не смогли создать work item — не блокируем эстафету
+        wi = self.get(wid)
+        state = self._lock_state_read(wi)
+        age_min = (_time.time() - float(state.get("ts", 0))) / 60.0
+        if state.get("holder") and state["holder"] != holder and age_min < self.RING_LOCK_TTL_MIN:
+            return False
+        payload = self._lock_state_write({"holder": holder, "ts": _time.time()})
+        ops = [{"op": "test", "path": "/rev", "value": wi["rev"]},
+               {"op": "add", "path": "/fields/System.Description", "value": payload}]
+        try:
+            self._patch(wid, ops)
+            return True
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (400, 409, 412):
+                return False   # кто-то захватил в ту же секунду
+            raise
+
+    def ring_lock_release(self, holder: str) -> None:
+        """Снять замок, если он всё ещё за нами (не трогаем чужой)."""
+        wid = self._ring_lock_item(create=False)
+        if not wid:
+            return
+        wi = self.get(wid)
+        state = self._lock_state_read(wi)
+        if state.get("holder") != holder:
+            return
+        try:
+            self._patch(wid, [{"op": "test", "path": "/rev", "value": wi["rev"]},
+                              {"op": "add", "path": "/fields/System.Description",
+                               "value": self._lock_state_write({})}])
+        except requests.HTTPError:
+            pass   # не критично: TTL освободит сам
 
     def claim(self, wi_id: int, worker: str) -> bool:
         """Атомарно застолбить work item за воркером (оптимистичная блокировка
