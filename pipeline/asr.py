@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -168,10 +169,103 @@ def _local(audio: Path) -> list[tuple[int, str]]:
     return [(int(s.start), s.text.strip()) for s in segments if s.text.strip()]
 
 
+# --- whisper.cpp (ggml-org/whisper.cpp) ----------------------------------------
+# Зачем рядом с cloudflare: у CF 10k нейронов/сутки на аккаунт, и квота ОБЩАЯ с
+# эмбеддингом (bge-m3), а Whisper дороже на порядки — ASR первым выжигает лимит.
+# whisper.cpp — один C++ бинарник на CPU: никакой квоты, платим только минутами
+# раннера. Путь к бинарю/модели через env, сборка — ci_tick._ensure_whispercpp().
+WHISPER_CPP_BIN = os.getenv("WHISPER_CPP_BIN", "")
+WHISPER_CPP_MODEL = os.getenv("WHISPER_CPP_MODEL", "")
+WHISPER_CPP_THREADS = os.getenv("WHISPER_CPP_THREADS", "")
+
+
+def _find_whispercpp() -> tuple[str, str]:
+    """(бинарь, модель). Ищем по env, потом в ./whisper.cpp рядом с проектом."""
+    root = Path(__file__).resolve().parent.parent
+    bin_path = WHISPER_CPP_BIN
+    if not bin_path:
+        for cand in (root / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+                     root / "whisper.cpp" / "build" / "bin" / "main",
+                     root / "whisper.cpp" / "main"):
+            if cand.exists():
+                bin_path = str(cand)
+                break
+    if not bin_path:
+        found = shutil.which("whisper-cli") or shutil.which("whisper.cpp")
+        if found:
+            bin_path = found
+    if not bin_path:
+        raise RuntimeError("whisper.cpp: бинарь не найден (WHISPER_CPP_BIN)")
+
+    model = WHISPER_CPP_MODEL
+    if not model:
+        mdir = root / "whisper.cpp" / "models"
+        # ASR_LOCAL_MODEL переиспользуем как имя ggml-модели (base/small/...)
+        for name in (f"ggml-{ASR_LOCAL_MODEL}.bin", "ggml-base.bin", "ggml-small.bin"):
+            if (mdir / name).exists():
+                model = str(mdir / name)
+                break
+    if not model:
+        raise RuntimeError("whisper.cpp: модель не найдена (WHISPER_CPP_MODEL)")
+    return bin_path, model
+
+
+def _whispercpp(audio: Path) -> list[tuple[int, str]]:
+    """Распознать локальным whisper.cpp. Вход приводим к 16кГц моно WAV —
+    whisper.cpp принимает только его, а провайдеры аудио отдают mp3."""
+    bin_path, model = _find_whispercpp()
+    tmpdir = Path(tempfile.mkdtemp(prefix="wcpp_"))
+    try:
+        wav = tmpdir / "a.wav"
+        conv = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(audio), "-ar", "16000", "-ac", "1",
+             "-c:a", "pcm_s16le", str(wav)],
+            capture_output=True, text=True, timeout=600)
+        if conv.returncode != 0 or not wav.exists():
+            raise RuntimeError(f"whisper.cpp: ffmpeg не смог в wav "
+                               f"({conv.stderr[-200:]})")
+
+        out_base = tmpdir / "out"
+        cmd = [bin_path, "-m", model, "-f", str(wav), "-oj",
+               "-of", str(out_base), "-nt"]
+        if WHISPER_CPP_THREADS:
+            cmd += ["-t", WHISPER_CPP_THREADS]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=5400)
+        js = out_base.with_suffix(".json")
+        if p.returncode != 0 or not js.exists():
+            raise RuntimeError(f"whisper.cpp: код {p.returncode} "
+                               f"({(p.stderr or p.stdout)[-250:]})")
+
+        body = json.loads(js.read_text(encoding="utf-8", errors="replace"))
+        lines: list[tuple[int, str]] = []
+        for seg in body.get("transcription", []):
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            # offsets.from — миллисекунды от начала
+            ms = ((seg.get("offsets") or {}).get("from"))
+            if ms is None:
+                ts = ((seg.get("timestamps") or {}).get("from") or "0")
+                # формат "00:00:12,340"
+                try:
+                    hh, mm, rest = ts.split(":")
+                    ss = float(rest.replace(",", "."))
+                    ms = int(((int(hh) * 60 + int(mm)) * 60 + ss) * 1000)
+                except Exception:  # noqa: BLE001
+                    ms = 0
+            lines.append((int(ms) // 1000, text))
+        if not lines:
+            raise RuntimeError("whisper.cpp: пустой транскрипт")
+        return lines
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def transcribe_file(audio: Path) -> list[tuple[int, str]]:
-    """ASR из УЖЕ скачанного локального аудио (YouTube-фолбэк: аудио тянет yt-dlp
-    дома, т.к. Kaggle/облако YouTube режет). Провайдеры cloudflare (free) / local
-    (faster-whisper); 'remote' пропускаем — он принимает media_url, не файл."""
+    """ASR из УЖЕ скачанного локального аудио. Провайдеры:
+    cloudflare (free, но 10k нейронов/сутки на аккаунт и квота общая с эмбеддингом;
+    ротация по CF_TOKENS внутри) / whispercpp (C++ на CPU, без квоты) /
+    local (faster-whisper). 'remote' пропускаем — он принимает media_url, не файл."""
     errors = []
     for name in ASR_PROVIDERS:
         if name == "remote":
@@ -179,6 +273,8 @@ def transcribe_file(audio: Path) -> list[tuple[int, str]]:
         try:
             if name == "cloudflare":
                 return _cloudflare(audio)
+            if name in ("whispercpp", "whisper.cpp", "whisper_cpp"):
+                return _whispercpp(audio)
             if name == "local":
                 return _local(audio)
             errors.append(f"{name}: unknown")
