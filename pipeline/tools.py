@@ -52,6 +52,38 @@ def _material_from_r2(vid: str) -> str:
     return ""
 
 
+def _subs_ids_by_value(ado: AdoClient, batch: int,
+                       partition: str | None) -> list[int]:
+    """Отобрать самые СОДЕРЖАТЕЛЬНЫЕ тикеты из state:subs, а не первые по дате.
+
+    ЗАЧЕМ. Дистилляция ограничена платными квотами (недельная у Kimi, ночная у
+    облачного агента Claude), а очередь на 20000+. FIFO по CreatedDate тратил
+    оплаченный вызов на что попало — в том числе на 40-строчные обзоры, из которых
+    кейса не выйдет. Берём пул из головы очереди, читаем тела и отдаём верхушку
+    по объёму материала. Отключить: DISTILL_SELECT=fifo.
+    """
+    import os
+    want = batch
+    if os.getenv("DISTILL_SELECT", "longest") == "fifo":
+        return ado.query_by_state("subs", top=batch, partition=partition)
+
+    pool = max(int(os.getenv("DISTILL_POOL", "4")), 1)
+    min_chars = int(os.getenv("DISTILL_MIN_MATERIAL", "250"))
+    ids = ado.query_by_state("subs", top=min(batch * pool, 2000),
+                             partition=partition)
+    sized: list[tuple[int, int]] = []
+    for i in range(0, len(ids), 200):
+        for wi in ado.get_batch(ids[i:i + 200],
+                                fields=("System.Id", "System.Description")):
+            n = len(_material_from_body(wi))
+            if n >= min_chars:
+                sized.append((n, wi["id"]))
+    if not sized:
+        return ids[:want]            # нечего сортировать — отдаём как есть
+    sized.sort(reverse=True)
+    return [wid for _, wid in sized[:want]]
+
+
 def cmd_next_subs(batch: int, partition: str | None) -> None:
     # Отдаём ТОЛЬКО метаданные (без транскрипта) — под-агент берёт материал сам через
     # get-material. Так батч можно делать большим (100+), не переполняя контекст
@@ -59,12 +91,22 @@ def cmd_next_subs(batch: int, partition: str | None) -> None:
     # get-material (claim-at-process), поэтому необработанные за прогон остаются в
     # очереди для следующего (ничего не застревает «занятым»).
     ado = AdoClient()
-    ids = ado.query_by_state("subs", top=batch, partition=partition)
+    ids = _subs_ids_by_value(ado, batch, partition)
     out = []
     for wi in ado.get_batch(ids, fields=("System.Title",)):
         title = wi["fields"].get("System.Title", "")
         vid = ado.video_id_from_title(title) or ""
-        stype = "forum" if vid.startswith("frm-") else "youtube"
+        # Три типа, как обещано в DISTILL_AGENT.md. Раньше было «frm- иначе
+        # youtube», из-за чего CarCareKiosk и reddit-посты приезжали агенту с
+        # ярлыком youtube.
+        if vid.startswith("frm-"):
+            stype = "forum"
+        elif vid.startswith("cck-"):
+            stype = "carcarekiosk"
+        elif is_youtube_vid(vid):
+            stype = "youtube"
+        else:
+            stype = "forum"          # reddit-пост: текст треда, не видео
         out.append({"wi_id": wi["id"], "video_id": vid,
                     "source_type": stype, "title": title.split("]", 1)[-1].strip()})
     json.dump(out, sys.stdout, ensure_ascii=False, indent=1)
