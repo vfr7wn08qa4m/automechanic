@@ -56,7 +56,7 @@ os.environ.setdefault("ASR_PROVIDERS", "cloudflare,local")  # дома: CF free 
 import html as _html                                          # noqa: E402
 
 from pipeline import config                                   # noqa: E402
-from pipeline.ado import AdoClient                            # noqa: E402
+from pipeline.ado import AdoClient, is_youtube_vid            # noqa: E402
 from pipeline.store import archive_blob                       # noqa: E402
 from pipeline.subtitle_providers import asr_transcript        # noqa: E402
 from pipeline.subtitles import to_prompt_text                 # noqa: E402
@@ -75,6 +75,7 @@ def _candidates(ado, batch: int) -> list[int]:
         "AND [System.Tags] NOT CONTAINS 'asr-failed' "
         "AND [System.Title] CONTAINS '[vid:' "
         "AND [System.Title] NOT CONTAINS 'vid:frm-' "
+        "AND [System.Title] NOT CONTAINS 'vid:cck-' "
         "ORDER BY [System.ChangedDate] DESC", top=batch)
 
 
@@ -100,6 +101,12 @@ def backfill(ado, batch: int) -> int:
         wi = ado.get(wi_id)
         vid = ado.video_id_from_title(wi["fields"]["System.Title"])
         if not vid:
+            continue
+        # reddit-пост ([vid:1v9vfuf]) — не видео: качать аудио с YouTube по этому
+        # id бессмысленно. Метим asr-failed, чтобы не выбирать его снова.
+        if not is_youtube_vid(vid):
+            _retag(ado, wi_id, add=("asr-failed",))
+            print(f"  #{wi_id} {vid}: не YouTube-ID — ASR не применим, пропуск")
             continue
         print(f"  #{wi_id} {vid}: качаю аудио + Whisper...")
         try:
