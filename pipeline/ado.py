@@ -16,6 +16,7 @@ offtopic) маппятся на реальный System.State через STATE_M
 from __future__ import annotations
 
 import base64
+import re
 
 import requests
 
@@ -37,6 +38,28 @@ STATE_MAP = {
 
 def _wiql_quote(v: str) -> str:
     return v.replace("'", "''")
+
+
+# Пространство [vid:] делят РАЗНЫЕ источники, и YouTube-ID узнаётся только по
+# форме (11 символов base64url), а не по префиксу:
+#     YouTube        aJe2bsIy0Uk      (11 симв., без префикса)
+#     форум-тред     frm-<hash>
+#     CarCareKiosk   cck-<sha1-12>
+#     reddit-пост    1v9vfuf          (6-8 симв., БЕЗ префикса — как YouTube!)
+# Отрицательная проверка «CONTAINS '[vid:' AND NOT CONTAINS 'vid:frm-'» считала
+# reddit-посты видео: fix_truncated_subs видел в тексте поста 0 таймкодов,
+# объявлял транскрипт обрезанным и СТИРАЛ тело тикета, после чего subs-пайплайн
+# уходил тянуть титры для несуществующего видео 1v9vfuf. Проверять надо форму.
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def is_youtube_vid(vid: str | None) -> bool:
+    """True только для настоящего YouTube-ID (ровно 11 символов base64url).
+
+    WIQL не умеет регулярки, поэтому в запросе фильтр остаётся грубым
+    (по префиксам), а точная отсечка — здесь, после чтения тайтла.
+    """
+    return bool(vid and _YT_ID_RE.match(vid))
 
 
 class AdoClient:
