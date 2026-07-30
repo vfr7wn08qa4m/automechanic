@@ -59,6 +59,28 @@ def _has_asr_backlog(ado) -> bool:
         return False
 
 
+def _ensure_faster_whisper() -> bool:
+    """Доставить faster-whisper ТОЛЬКО когда реально дошли до ASR-задачи.
+
+    В общий pip install воркфлоу его не кладём: ctranslate2 тянет ~30МБ и это
+    замедляло бы КАЖДЫЙ тик, хотя asr выпадает редко. Ставим по требованию.
+    """
+    try:
+        import faster_whisper  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    import subprocess
+    print("[tick] ставлю faster-whisper для локального Whisper на раннере...")
+    p = subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                        "faster-whisper"], capture_output=True, text=True,
+                       timeout=600)
+    if p.returncode != 0:
+        print(f"[tick] не удалось поставить faster-whisper: {p.stderr[-300:]}")
+        return False
+    return True
+
+
 def _choose_task(ado) -> str:
     """Взвешенный рандом со стирингом: пустые стадии обнуляются."""
     weights = {
@@ -130,12 +152,18 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
         return embed_batch(ado, max(batch, 40), partition) > 0
 
     if task == "asr":
-        # Видео БЕЗ титров: аудио берёт convert1s (сторонний YouTube→MP3 — тянет
-        # YouTube на СВОЁМ сервере, поэтому датацентр-блок обходится), распознаёт
-        # Whisper на Cloudflare (длинное аудио режется на куски). Раннер почти не
-        # грузится: сеть + ffmpeg. Успех -> тикет обратно в state:subs.
-        os.environ.setdefault("AUDIO_PROVIDERS", "convert1s,ytdlp")
-        os.environ.setdefault("ASR_PROVIDERS", "cloudflare")
+        # Видео БЕЗ титров: аудио берут convert1s/rapidapi (сторонние YouTube→MP3 —
+        # тянут YouTube на СВОИХ серверах, поэтому датацентр-блок обходится).
+        # Распознавание: cloudflare (дёшево по времени раннера, но 10k нейронов в
+        # сутки на аккаунт, и с эмбеддингом квота ОБЩАЯ) -> local faster-whisper
+        # НА РАННЕРЕ (квоту CF не тратит вовсе, платим только минутами GitHub).
+        # 2026-07-30: ASR встал именно на «cloudflare: 429» — локальный Whisper
+        # снимает этот потолок, поэтому он вторым в цепочке.
+        os.environ.setdefault("AUDIO_PROVIDERS", "convert1s,rapidapi")
+        os.environ.setdefault("ASR_PROVIDERS", "cloudflare,local")
+        os.environ.setdefault("ASR_LOCAL_MODEL", "base")
+        if "local" in os.environ["ASR_PROVIDERS"]:
+            _ensure_faster_whisper()
         from scripts.asr_backfill import backfill
         return backfill(ado, min(batch, 5)) > 0
 
