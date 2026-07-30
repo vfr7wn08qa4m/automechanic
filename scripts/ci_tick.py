@@ -257,15 +257,38 @@ def main() -> None:
     print(f"[tick] batch={args.batch}, partition={args.partition}, task={args.task}, run_all={args.run_all}")
     print(f"[tick] python={sys.version.split()[0]}, env={os.getenv('GITHUB_ACTOR', 'unknown')}")
 
+    print(f"[tick] подключение к ADO...")
+    ado = AdoClient()
+    print(f"[tick] ADO подключен: org={ado.org}, project={ado.project}")
+
+    # Общий замок эстафеты (см. pipeline/ado.py::ring_lock_acquire). Каждый ручной
+    # workflow_dispatch раньше запускал СВОЮ независимую цепочку — ring_handoff в
+    # конце тика просто дёргал следующий аккаунт, не проверяя, бежит ли уже где-то
+    # ДРУГАЯ эстафета. concurrency: в workflow не спасает — она держит один прогон
+    # только внутри ОДНОГО репозитория, а тут 22 разных. 2026-07-30: несколько
+    # тестовых dispatch'ей за день породили несколько параллельных цепочек, кольцо
+    # крутило 3-4 сканера разом. Если замок занят другим (свежим) прогоном — эта
+    # лишняя цепочка тихо гаснет здесь: ЗАДАЧУ НЕ ДЕЛАЕМ И ring_handoff НЕ ЗОВЁМ,
+    # иначе она бы сама породила ещё один хоп дальше вместо того чтобы схлопнуться.
+    holder = f"{os.getenv('GITHUB_ACTOR', 'unknown')}#{os.getenv('GITHUB_RUN_ID', '0')}"
+    if not ado.ring_lock_acquire(holder):
+        print(f"[tick] замок эстафеты занят другим прогоном — эта цепочка "
+              f"гаснет (ring_handoff НЕ вызывается)")
+        return
+    print(f"[tick] замок эстафеты захвачен ({holder})")
+
+    try:
+        _main_locked(ado, args, holder)
+    finally:
+        ado.ring_lock_release(holder)
+
+
+def _main_locked(ado, args, holder: str) -> None:
     print(f"[tick] проверка бюджета...")
     if not guard(20):                   # месячный лимит минут исчерпан -> пропуск,
         print(f"[tick] бюджет исчерпан, пропуск")
         ring_handoff("tick", worked=False)   # но эстафету передаём дальше
         return
-
-    print(f"[tick] подключение к ADO...")
-    ado = AdoClient()
-    print(f"[tick] ADO подключен: org={ado.org}, project={ado.project}")
 
     # диагностика состояния очереди ДО РАБОТЫ
     try:
