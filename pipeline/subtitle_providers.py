@@ -1,15 +1,20 @@
 """Транскрипт видео БЕЗ домашнего раннера: цепочка сторонних источников.
 
-Порядок (env SUBTITLE_PROVIDERS, по умолчанию "ytdlp,invidious,supadata"):
+Порядок (env SUBTITLE_PROVIDERS, по умолчанию "tubetranscript"):
 
-1. ytdlp      — напрямую с YouTube. С чистого IP работает, с датацентрового
-                почти сразу 429. Поддерживает прокси (YTDLP_PROXY —
-                residential-прокси решает проблему CI за копейки).
+1. tubetranscript — сторонний веб-сервис (Playwright/Chromium). Единственный
+                провайдер, который реально отдаёт полный транскрипт; на нём и
+                работает кольцо.
 2. invidious  — публичные Invidious-инстансы (бесплатные зеркала YouTube,
                 /api/v1/captions). Инстансы смертны: список в env
                 INVIDIOUS_INSTANCES, актуальные — https://api.invidious.io.
 3. supadata   — коммерческий transcript-API с бесплатным тиром
                 (https://supadata.ai, SUPADATA_API_KEY). Стабильно, но квота.
+
+yt-dlp как провайдер титров УБРАН: с датацентра он ловит бот-блок сразу, а с
+домашнего IP так и не заработал. Модуль pipeline/subtitles.py остаётся — оттуда
+нужны to_prompt_text/vtt_to_lines, download_audio (аудио под ASR) и _run_ytdlp
+(резолв каналов в discovery); титры через него больше не тянем.
 
 Каждый провайдер сам пропускает себя, если не сконфигурирован/недоступен.
 Результат единый: TranscriptResult(lang, lines=[(sec, text)], raw, raw_ext).
@@ -24,7 +29,7 @@ from dataclasses import dataclass, field
 import requests
 
 from . import config
-from .subtitles import fetch_subtitles, vtt_to_lines
+from .subtitles import vtt_to_lines
 
 
 @dataclass
@@ -38,7 +43,7 @@ class TranscriptResult:
 
 
 SUBTITLE_PROVIDERS = [p.strip() for p in os.getenv(
-    "SUBTITLE_PROVIDERS", "ytdlp,invidious,supadata").split(",") if p.strip()]
+    "SUBTITLE_PROVIDERS", "tubetranscript").split(",") if p.strip()]
 
 INVIDIOUS_INSTANCES = [i.strip() for i in os.getenv(
     "INVIDIOUS_INSTANCES",
@@ -49,20 +54,16 @@ SUPADATA_API_KEY = os.getenv("SUPADATA_API_KEY", "")
 
 # страховка от обрезанных транскриптов: меньше этого числа строк = провайдер
 # недотянул (интро/огрызок) -> роутер пробует следующий провайдер.
-_MIN_TRANSCRIPT_LINES = int(os.getenv("TRANSCRIPT_MIN_LINES", "3"))
+# ВАЖНО: тот же порог использует scripts/fix_truncated_subs.py, решая, что
+# транскрипт обрезан. Пока здесь было 3, а там 5, транскрипт на 3-4 строки
+# считался успехом при добыче и «обрезанным» при проверке — тикет ходил по кругу
+# subs -> new -> subs. Число должно быть ОДНО; порог задаётся тут.
+MIN_TRANSCRIPT_LINES = int(os.getenv("TRANSCRIPT_MIN_LINES", "5"))
+_MIN_TRANSCRIPT_LINES = MIN_TRANSCRIPT_LINES      # старое имя, для совместимости
 
 
 def _langs_priority() -> list[str]:
     return [l.strip() for l in config.SUB_LANGS if l.strip()]
-
-
-# --- 1. yt-dlp ------------------------------------------------------------------
-
-def _via_ytdlp(video_id: str) -> TranscriptResult:
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    lang, vtt = fetch_subtitles(url)  # уважает YTDLP_PROXY через env yt-dlp
-    return TranscriptResult(lang=lang, lines=vtt_to_lines(vtt), raw=vtt,
-                            raw_ext="vtt", provider="ytdlp")
 
 
 # --- 2. Invidious ----------------------------------------------------------------
@@ -277,7 +278,26 @@ def _via_supadata(video_id: str) -> TranscriptResult:
         provider="supadata")
 
 
-_PROVIDERS = {"tubetranscript": _via_tubetranscript}
+_PROVIDERS = {
+    "tubetranscript": _via_tubetranscript,
+    "invidious": _via_invidious,
+    "supadata": _via_supadata,
+}
+
+# Санитайзер цепочки. Раньше несуществующее имя в SUBTITLE_PROVIDERS давало
+# ТИХИЙ отказ: get_transcript писал "unknown provider" по каждому видео и
+# возвращал ноль. Так local_fetch_subs (env SUBTITLE_PROVIDERS=ytdlp, а ytdlp из
+# реестра выпилен) прогонял по 40 видео за проход и не добывал ни одного титра.
+# Теперь: неизвестные имена отбрасываем с громким предупреждением, а если после
+# отсева не осталось НИЧЕГО — падаем обратно на дефолт, но не работаем впустую.
+_unknown = [p for p in SUBTITLE_PROVIDERS if p not in _PROVIDERS]
+if _unknown:
+    print(f"[subs] ⚠ неизвестные провайдеры в SUBTITLE_PROVIDERS: "
+          f"{','.join(_unknown)} (известны: {','.join(_PROVIDERS)}) — отброшены")
+    SUBTITLE_PROVIDERS = [p for p in SUBTITLE_PROVIDERS if p in _PROVIDERS]
+if not SUBTITLE_PROVIDERS:
+    SUBTITLE_PROVIDERS = ["tubetranscript"]
+    print("[subs] ⚠ цепочка провайдеров пуста после отсева — беру tubetranscript")
 
 
 def lines_from_raw(raw_ext: str, raw: str) -> list[tuple[int, str]]:
@@ -312,19 +332,31 @@ def transcript_for_item(url: str, video_id: str) -> TranscriptResult:
 
 def _fetch_audio(video_id: str):
     """Аудио видео по цепочке провайдеров (env AUDIO_PROVIDERS, дефолт
-    'convert1s,ytdlp'): convert1s (сторонний YouTube→MP3, тянет YouTube на СВОИХ
-    серверах → работает с ДАТАЦЕНТРА/кольца) → yt-dlp (прямой, только домашний IP)."""
+    'convert1s,rapidapi').
+
+    Оба провайдера тянут YouTube на СВОИХ серверах, поэтому работают с
+    ДАТАЦЕНТРОВОГО IP — проверено на GitHub-раннере 2026-07-30, по 5/5 на
+    реальных кандидатах. Отказы у них ПОШТУЧНЫЕ и на одних и тех же видео
+    (значит дело в видео, а не в нас) — отсюда смысл второго провайдера.
+
+    ⚠️ Через CRAWL_PROXY (Cloudflare Worker) аудио НЕ гонять: в облаке замерено
+    0/5 — convert1s получает 403, а rapidapi 401, потому что релей срезает
+    заголовок x-rapidapi-key. Только напрямую.
+
+    yt-dlp из цепочки убран: с датацентра бот-блок, с домашнего IP не заработал.
+    """
     import os
-    providers = (os.getenv("AUDIO_PROVIDERS") or "convert1s,ytdlp").split(",")
+    providers = (os.getenv("AUDIO_PROVIDERS") or "convert1s,rapidapi").split(",")
     errors = []
     for prov in [p.strip() for p in providers if p.strip()]:
         try:
             if prov == "convert1s":
                 from .audio_convert1s import fetch_mp3
                 return fetch_mp3(video_id)
-            if prov in ("ytdlp", "yt-dlp"):
-                from .subtitles import download_audio
-                return download_audio(f"https://www.youtube.com/watch?v={video_id}")
+            if prov == "rapidapi":
+                from .audio_rapidapi import fetch_mp3 as fetch_rapid
+                return fetch_rapid(video_id)
+            errors.append(f"{prov}: неизвестный провайдер аудио")
         except Exception as e:  # noqa: BLE001 — пробуем следующий провайдер
             errors.append(f"{prov}: {str(e)[:160]}")
     raise RuntimeError("audio: все провайдеры не смогли скачать: " + " || ".join(errors))
