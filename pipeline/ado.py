@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import urllib.parse
 
 import requests
 
@@ -508,6 +509,45 @@ class AdoClient:
             if e.response is not None and e.response.status_code in (400, 409, 412):
                 return False
             raise
+
+    def state_counts(self) -> dict[str, int]:
+        """ТОЧНЫЙ счёт work items по ЛОГИЧЕСКИМ состояниям — один запрос к
+        Analytics OData.
+
+        Зачем не WIQL: он режется лимитом 20000 (VS402337), а бэклог subs уже
+        >47k — то есть посчитать глубину очереди обычным запросом НЕЛЬЗЯ в
+        принципе, только «есть/нет» (query_by_state с $top). Analytics отдаёт
+        точные счётчики группировкой на сервере и лимитом не ограничен.
+
+        Возвращает {логическое_состояние: количество}. Пустой dict, если
+        Analytics недоступен (другой скоуп PAT / отключён) — вызывающий должен
+        это пережить и откатиться на статическое поведение.
+        """
+        # Один System.State может отвечать двум логическим (failed/offtopic ->
+        # Removed): раскладываем обратно по первому совпадению — конвейеру важны
+        # именно очереди new/subs/distilled, а не разбор Removed.
+        back = {}
+        for logical, real in STATE_MAP.items():
+            back.setdefault(real, logical)
+        flt = (f"WorkItemType eq '{config.ADO_WORKITEM_TYPE}' "
+               "and Tags/any(t:t/TagName eq 'auto-mech')")
+        apply_expr = f"filter({flt})/groupby((State),aggregate($count as Count))"
+        url = (f"https://analytics.dev.azure.com/{self.org}/{self.project}"
+               "/_odata/v3.0-preview/WorkItems?"
+               + urllib.parse.urlencode({"$apply": apply_expr}))
+        try:
+            r = self.s.get(url, headers={"Accept": "application/json"}, timeout=30)
+            r.raise_for_status()
+            rows = r.json().get("value", [])
+        except Exception:  # noqa: BLE001 — не критично, вызывающий откатится
+            return {}
+        out: dict[str, int] = {}
+        for row in rows:
+            real = row.get("State")
+            if not real:
+                continue
+            out[back.get(real, real)] = int(row.get("Count") or 0)
+        return out
 
     def query_by_state(self, state: str, top: int = 50,
                        partition: str | None = None) -> list[int]:
