@@ -21,6 +21,13 @@ Backup — НЕ рандом, а гард «раз/сутки»: если сег
 впустую). worked=True сбрасывает idle кольца, worked=False растит его; кольцо
 встаёт, когда полный круг прошёл без работы.
 
+ДИНАМИЧЕСКИЕ ВЕСА (2026-07-31): проценты выше — лишь БАЗА, дальше они
+домножаются на реальную глубину очередей (_FLOW/_dyn_factors, точный счёт через
+ado.state_counts()). Тик мигрирует туда, где скопилось: стадия с забитым входом
+получает до x3, а всё, что наливает в уже забитую очередь, глушится до x0.05.
+Пример живой раскладки при subs=48k: distill 68%, subs 16%, forums 4.6%
+(вместо статических 15/35/30). Отключается DYNAMIC_WEIGHTS=0.
+
     python scripts/ci_tick.py [--batch 10] [--partition solo] [--task subs]
 """
 from __future__ import annotations
@@ -118,17 +125,78 @@ def _ensure_whispercpp() -> bool:
     return True
 
 
+# Поток конвейера: (какую очередь задача РАЗГРЕБАЕТ, какую НАПОЛНЯЕТ).
+# None — стадии нет: у asr/forums вход не очередь ADO (свой бэклог/внешний сайт),
+# у embed выход конечный (Qdrant), дальше копиться нечему.
+# ВАЖНО: subs и asr — одновременно и потребители, и производители. Они разгребают
+# new/бэклог, но кладут результат в ТУ ЖЕ очередь subs, которую разгребает distill.
+# Без учёта выхода они выглядели «полезными» и получали 60% тиков, продолжая
+# наливать в очередь, где уже 48k ждут дистилляции.
+_FLOW = {
+    "subs":     ("new", "subs"),
+    "asr":      (None, "subs"),
+    "forums":   (None, "subs"),
+    "delta":    (None, "new"),
+    "discover": (None, "new"),
+    "distill":  ("subs", "distilled"),
+    "embed":    ("distilled", None),
+}
+# «Здоровая» глубина очереди: на ней множители равны 1.0 и веса = базовым.
+_QUEUE_TARGET = float(os.getenv("QUEUE_TARGET", "500"))
+
+
+def _dyn_factors(counts: dict) -> dict[str, float]:
+    """Множители к базовым весам по РЕАЛЬНОЙ глубине очередей.
+
+    За вход: чем глубже, тем выше вес (до x3) — тик мигрирует туда, где скопилось.
+    За выход: чем глубже, тем ниже вес (до x0.05) — незачем лить ещё, когда там
+    уже десятки тысяч ждут. Корень (а не линейно), чтобы очередь на два порядка
+    больше не выжирала пул целиком: перекос должен смещать приоритет, а не
+    превращать кольцо в однозадачное (иначе упавшая по квоте стадия застопорит
+    всё кольцо — idle растёт, работа не делается).
+    """
+    f: dict[str, float] = {}
+    for task, (src, dst) in _FLOW.items():
+        k = 1.0
+        if src is not None:
+            d = counts.get(src, 0)
+            if d <= 0:
+                f[task] = 0.0            # вход пуст — стадию не выбираем вовсе
+                continue
+            k *= min(3.0, max(0.5, (d / _QUEUE_TARGET) ** 0.5))
+        if dst is not None:
+            d = counts.get(dst, 0)
+            if d > _QUEUE_TARGET:
+                k *= max(0.05, (_QUEUE_TARGET / d) ** 0.5)
+        f[task] = k
+    return f
+
+
 def _choose_task(ado) -> str:
     """Взвешенный рандом со стирингом: пустые стадии обнуляются."""
-    weights = {
-        "subs":     int(os.getenv("W_SUBS", "35")),      # youtube_transcripts
-        "forums":   int(os.getenv("W_FORUMS", "30")),    # forum_posts
-        "delta":    int(os.getenv("W_DELTA", "20")),     # sync_youtube_channel_videos
-        "distill":  int(os.getenv("W_DISTILL", "15")),   # LLM-дистилляция
-        "embed":    int(os.getenv("W_EMBED", "10")),     # index_to_qdrant
-        "asr":      int(os.getenv("W_ASR", "15")),       # Whisper для видео БЕЗ титров
-        "discover": int(os.getenv("W_DISCOVER", "5")),   # discover_youtube_channels
+    weights: dict[str, float] = {
+        "subs":     float(os.getenv("W_SUBS", "35")),    # youtube_transcripts
+        "forums":   float(os.getenv("W_FORUMS", "30")),  # forum_posts
+        "delta":    float(os.getenv("W_DELTA", "20")),   # sync_youtube_channel_videos
+        "distill":  float(os.getenv("W_DISTILL", "15")), # LLM-дистилляция
+        "embed":    float(os.getenv("W_EMBED", "10")),   # index_to_qdrant
+        "asr":      float(os.getenv("W_ASR", "15")),     # Whisper для видео БЕЗ титров
+        "discover": float(os.getenv("W_DISCOVER", "5")), # discover_youtube_channels
     }
+    # ДИНАМИКА. Один запрос к Analytics отдаёт точные глубины всех очередей
+    # (WIQL этого не может — режется лимитом 20000, а subs уже >47k). Analytics
+    # недоступен -> counts пуст -> работаем на статических весах, как раньше.
+    if os.getenv("DYNAMIC_WEIGHTS", "1") != "0":
+        counts = ado.state_counts()
+        if counts:
+            fac = _dyn_factors(counts)
+            for t, k in fac.items():
+                if t in weights:
+                    weights[t] *= k
+            print(f"[tick] очереди: " + ", ".join(
+                f"{q}={counts.get(q, 0)}" for q in ("new", "subs", "distilled")))
+            print(f"[tick] динамические веса: " + ", ".join(
+                f"{t}={w:.1f}" for t, w in sorted(weights.items(), key=lambda x: -x[1])))
     if not _has(ado, "new"):
         weights["subs"] = 0            # нечего транскрибировать
     if not _has(ado, "subs"):
