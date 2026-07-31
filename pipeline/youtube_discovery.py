@@ -324,13 +324,22 @@ def main() -> None:
 
 
 def sync_active_channels(ado, channels: dict | None, create_workitems: bool,
-                         max_videos: int) -> int:
+                         max_videos: int, deadline: float | None = None) -> int:
     """Дельта по активным каналам: новые видео -> New Task'и. Ядро delta-пайплайна.
-    Источник истины — активные Epic-каналы ADO (state:paused пропускаются)."""
+    Источник истины — активные Epic-каналы ADO (state:paused пропускаются).
+
+    deadline (time.monotonic()) — без него цикл идёт по ВСЕМ активным каналам
+    без остановки: при их большом числе/медленном API это упирается в жёсткий
+    45-минутный timeout-minutes джобы GitHub Actions, и джоба гибнет по таймауту
+    (в статусе — "cancelled", хотя по сути не ошибка, а нехватка тайм-бокса).
+    Найдено 2026-07-31 живьём (gh15 run#77: 26 мин от старта задачи до обрыва)."""
     channels = channels if channels is not None else {}
     total = 0
     if ado is not None:
         for ch in ado.list_channel_items(kind="channel", active_only=True):
+            if deadline and time.monotonic() >= deadline:
+                print(f"  delta: тайм-бокс исчерпан, остановился досрочно (сделано {total})")
+                break
             cid = ch["channel_id"]
             info = channels.get(cid, {"name": ch["name"]})
             total += sync_channel(cid, info, create_workitems, max_videos, ado=ado)
@@ -338,18 +347,23 @@ def sync_active_channels(ado, channels: dict | None, create_workitems: bool,
                 name=ch["name"], last_sync=datetime.now(timezone.utc).isoformat())
     else:
         for cid, info in channels.items():
+            if deadline and time.monotonic() >= deadline:
+                break
             total += sync_channel(cid, info, create_workitems, max_videos)
             info["last_sync"] = datetime.now(timezone.utc).isoformat()
     return total
 
 
 def ensure_my_channels(ado, channels: dict, create_workitems: bool,
-                       max_videos: int) -> int:
+                       max_videos: int, deadline: float | None = None) -> int:
     """Зарегистрировать каналы из my_channels.txt как Epic и синкнуть их видео.
     Идемпотентно: повторный вызов не плодит дубли (attach_video дедупит)."""
     refs = load_my_channels()
     total = 0
     for ref in refs:
+        if deadline and time.monotonic() >= deadline:
+            print(f"  my_channels: тайм-бокс исчерпан, остановился досрочно (сделано {total})")
+            break
         ch = resolve_channel(ref)
         if not ch:
             print(f"  my_channels: не разрешён {ref}")
