@@ -327,6 +327,27 @@ class AdoClient:
         self._patch(wi_id, [{"op": "add", "path": "/fields/System.Description",
                              "value": cur + html_block}])
 
+    # Маркер блока результата дистилляции — общий для ВСЕХ писателей
+    # (tools.save-case, local_distill_batch, local_distill_kimi, import_distill_result).
+    CASE_MARKER = "<hr><b>RepairCase"
+
+    def replace_case_block(self, wi_id: int, html_block: str) -> None:
+        """Записать блок RepairCase, ЗАМЕНИВ прошлые попытки, а не дописав к ним.
+
+        Раньше все писатели звали append_description, и тикет копил историю: при
+        каждой пере-дистилляции (возврат из offtopic/failed, смена модели) в тело
+        падал ЕЩЁ один блок. Замер 2026-07-31: #2547 — 9 блоков, тело 232 КБ при
+        полезном материале ~1 КБ. Вред двойной: (1) тело пухнет без предела,
+        (2) читатели брали ПЕРВЫЙ блок, т.е. самый старый кейс — свежая
+        дистилляция уезжала в мусор (переход Kimi -> Gemini так и хоронился).
+        Материал тикета — всё, что ДО первого маркера, — сохраняется как есть.
+        """
+        wi = self.get(wi_id)
+        cur = wi["fields"].get("System.Description", "") or ""
+        base = cur.split(self.CASE_MARKER, 1)[0]
+        self._patch(wi_id, [{"op": "add", "path": "/fields/System.Description",
+                             "value": base + html_block}])
+
     def exists_url(self, url: str) -> int | None:
         """Дельта-поиск: есть ли уже Task с такой Custom.url. Возвращает id или None."""
         ids = self._wiql(
