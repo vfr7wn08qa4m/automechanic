@@ -153,7 +153,9 @@ def cmd_save_case(wi_id: int, case_file: str) -> None:
     ado = AdoClient()
     # кейс -> НАЗАД В ТЕЛО ТИКЕТА (ADO = база, «материал/результат в воркайтем»)
     import html as _h
-    ado.append_description(wi_id,
+    # replace_, а не append_: пере-дистилляция должна ЗАМЕНЯТЬ прошлый кейс,
+    # иначе тело копит блоки, а читатели берут самый старый (см. ado.replace_case_block)
+    ado.replace_case_block(wi_id,
         f"<hr><b>RepairCase</b> (system: {_h.escape(case.system or '')}, "
         f"conf {case.confidence}) <pre>{_h.escape(case.model_dump_json())}</pre>")
     state = "distilled" if not case.off_topic else "offtopic"
