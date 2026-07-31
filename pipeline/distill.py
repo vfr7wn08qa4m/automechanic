@@ -60,6 +60,11 @@ Return ONLY the JSON object, no markdown fences, no commentary.""".replace(
     "__CASE_JSON_TEMPLATE__", CASE_JSON_TEMPLATE)
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+# Признак ИСЧЕРПАННОЙ квоты (суточной у Gemini, недельной у Kimi) в тексте 429 —
+# в отличие от обычного «слишком часто», такой ключ до сброса не оживёт.
+_QUOTA_RE = re.compile(
+    r"quota|usage limit|billing cycle|exceeded your current|insufficient_quota",
+    re.I)
 
 
 def _endpoints() -> list[tuple[str, str, str]]:
@@ -177,6 +182,13 @@ def distill(transcript: str, source: Source, retries: int = 2) -> RepairCase:
                 status = getattr(e, "status_code", None)
                 if status in (401, 402, 404, 410):
                     break  # ключ/модель мертвы — ретраить бессмысленно, дальше по каскаду
+                # СУТОЧНАЯ/НЕДЕЛЬНАЯ КВОТА (429 + слова про лимит) — ретраить этот
+                # ключ бессмысленно, он оживёт только на следующие сутки. Раньше
+                # такой ключ отъедал 3 попытки с паузами 5с+10с; на пяти выбранных
+                # ключах Gemini это 75 секунд впустую ПЕРЕД тем, как каскад вообще
+                # доберётся до Kimi. Уходим к следующему эндпоинту сразу.
+                if status == 429 and _QUOTA_RE.search(str(e)):
+                    break
                 if attempt < retries:
                     time.sleep(5 * (attempt + 1))
     raise RuntimeError("distill: каскад исчерпан: " + " || ".join(errors))
