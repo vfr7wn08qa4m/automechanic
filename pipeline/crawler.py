@@ -197,7 +197,10 @@ def save_state(zone: str, state: dict) -> None:
              # загрузке last_refresh читался бы как 0 (значение по умолчанию) и
              # ре-визит срабатывал бы на КАЖДОМ холостом запуске, а не раз в
              # LISTING_REFRESH_HOURS.
-             "last_refresh": state.get("last_refresh", 0)}
+             "last_refresh": state.get("last_refresh", 0),
+             # без этого поля посев сайта происходил бы КАЖДЫЙ раз, когда фронтир
+             # пуст, а не один раз навсегда — см. seed_frontier.
+             "seeded_hosts": state.get("seeded_hosts", [])}
     payload = json.dumps(state, ensure_ascii=False)
     (config.DATA_DIR / f"crawl_{zone}.json").write_text(payload, encoding="utf-8")
     if config.S3_ENDPOINT:
@@ -245,14 +248,27 @@ def seed_frontier(state: dict, sites: list[ForumSite]) -> None:
     разделов (не с глубокой пагинации — та историческая, её незачем перечитывать)
     и отправляем их на повторный обход. Не чаще LISTING_REFRESH_HOURS, чтобы не
     хлестать форум попусту между появлением нового контента.
+
+    ВТОРОЙ БАГ, который это чинит: проверка "seen/listing_seen пусты" была ОДНА
+    НА ВСЮ ЗОНУ. В зоне с несколькими сайтами (напр. зона a: carmasters.org +
+    drive2.ru) как только у ОДНОГО сайта появлялась история, "первый прогон"
+    для ВСЕХ сайтов зоны считался пройденным — сиды drive2.ru (mode=seed, свои
+    2 URL) не попадали во фронтир НИКОГДА, потому что у carmasters к тому
+    моменту уже было тысячи seen/listing_seen. Теперь помним, какие хосты уже
+    сеяны (state["seeded_hosts"]), и досеваем любой ещё не сеянный сайт зоны
+    независимо от истории соседей.
     """
     if state["frontier"]:
         return
-    if not state.get("seen") and not state.get("listing_seen"):
-        for site in sites:
+    seeded = set(state.get("seeded_hosts", []))
+    fresh_hosts = [s for s in sites if s.host not in seeded]
+    if fresh_hosts:
+        for site in fresh_hosts:
             kind = "thread" if site.mode == "seed" else "listing"
             for url in site.seeds:
                 state["frontier"].append([url, kind])
+            seeded.add(site.host)
+        state["seeded_hosts"] = list(seeded)
         return
 
     now = time.time()
