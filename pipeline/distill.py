@@ -53,7 +53,7 @@ Rules:
   applicability_note: one phrase in the original language, e.g. "любой дизель с ТНВД".
 - timestamp_sec: integer seconds computed from the nearest [mm:ss] marker.
 - fixed: true only if the problem is confirmed solved in the video.
-- off_topic: true ONLY if this is NOT a concrete vehicle repair or diagnosis case — i.e. reviews, ads, unboxings, vlogs, or pure theory/opinion with no specific repair. ANY real repair or diagnosis is IN scope (off_topic=false): electrical, engine, transmission, suspension, brakes, body — all of it.
+- off_topic: true ONLY if there is NO reusable diagnostic/repair technique at all — i.e. pure reviews, ads, unboxings, vlogs, or opinion/market/economics talk with no hands-on procedure. A tool/technique demonstration (how to use a scope, multimeter, scan tool; how to read a measurement; a safety procedure) IS in scope (off_topic=false) even without a specific customer complaint or fault, as long as it teaches something a mechanic would reuse when diagnosing a real car. ANY real repair or diagnosis is also IN scope: electrical, engine, transmission, suspension, brakes, body — all of it.
 - confidence: 0..1, your honest estimate of extraction quality.
 - If several unrelated problems are covered, extract the MAIN one, mention others in summary_en.
 Return ONLY the JSON object, no markdown fences, no commentary.""".replace(
