@@ -49,13 +49,22 @@ def _case_from_body(wi: dict) -> RepairCase | None:
     """Кейс из ТЕЛА тикета (save-case кладёт RepairCase-JSON в <pre> после
     маркера). Это основной источник: облачный Claude-агент пишет только сюда."""
     desc = wi.get("fields", {}).get("System.Description", "") or ""
-    m = _re.search(r"RepairCase.*?<pre>(.*?)</pre>", desc, _re.S)
-    if not m:
+    blocks = _re.findall(r"RepairCase.*?<pre>(.*?)</pre>", desc, _re.S)
+    if not blocks:
         return None
-    try:
-        return RepairCase.model_validate_json(_html.unescape(m.group(1)))
-    except Exception:  # noqa: BLE001
-        return None
+    # ПОСЛЕДНИЙ блок, а не первый. Тело копит ИСТОРИЮ попыток дистилляции
+    # (append_description дописывает новый блок, старые не убирает): найдено
+    # 2026-07-31 — до 9 блоков в одном тикете, тело 232 КБ. re.search брал первый,
+    # то есть в Qdrant уезжал самый СТАРЫЙ кейс, а свежая пере-дистилляция
+    # выбрасывалась. Конкретно это хоронило переход Kimi -> Gemini: у тикетов
+    # #2547/#2661/#2671/#2701 старый k3-блок стоит off_topic=true, свежий
+    # gemini-блок — false. Идём с конца: если последний битый, откатываемся глубже.
+    for raw in reversed(blocks):
+        try:
+            return RepairCase.model_validate_json(_html.unescape(raw))
+        except Exception:  # noqa: BLE001 — битый блок пропускаем, берём предыдущий
+            continue
+    return None
 
 
 def load_case(vid: str) -> RepairCase | None:
