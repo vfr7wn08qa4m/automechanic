@@ -213,8 +213,13 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
         from pipeline.youtube_discovery import (ensure_my_channels, load_channels,
                                                 save_channels, sync_active_channels)
         ch = load_channels()
-        n = (ensure_my_channels(ado, ch, True, 30)
-             + sync_active_channels(ado, ch, True, 30))
+        # Тайм-бокс обязателен: без него цикл идёт по ВСЕМ активным каналам без
+        # остановки и на большом их числе упирается в жёсткий timeout-minutes (45)
+        # джобы — GitHub убивает джобу по таймауту (статус "cancelled", найдено
+        # 2026-07-31 живьём на gh15). CI_DELTA_MIN оставляет запас под setup-шаги.
+        deadline = time.monotonic() + float(os.getenv("CI_DELTA_MIN", "12")) * 60
+        n = (ensure_my_channels(ado, ch, True, 30, deadline=deadline)
+             + sync_active_channels(ado, ch, True, 30, deadline=deadline))
         save_channels(ch)
         print(f"[tick] delta: +{n} видео в очередь")
         return n > 0
