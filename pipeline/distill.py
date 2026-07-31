@@ -65,6 +65,7 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 def _endpoints() -> list[tuple[str, str, str]]:
     """Каскад (base_url, api_key, model). По умолчанию используем ТОЛЬКО Kimi."""
     import os
+    import random
     if config.DISTILL_ENDPOINTS:
         out = []
         for entry in config.DISTILL_ENDPOINTS.split(";"):
@@ -76,7 +77,16 @@ def _endpoints() -> list[tuple[str, str, str]]:
             if key:  # эндпоинт без ключа в env молча пропускаем
                 out.append((base_url, key, model))
         if out:
-            return out
+            # Перемешиваем НЕ-Kimi эндпоинты (обычно пул бесплатных ключей вроде
+            # Gemini) так, чтобы разные процессы/тики кольца не долбили один и тот
+            # же первый ключ подряд — иначе именно он первым упирается в дневной
+            # лимит, а остальные простаивают. Kimi (платный, лимит на весь пул
+            # общий) оставляем в исходном порядке — обычно последним в каскаде.
+            kimi_marker = "kimi" in config.KIMI_BASE_URL.lower()
+            free = [e for e in out if not (kimi_marker and e[0] == config.KIMI_BASE_URL)]
+            paid = [e for e in out if kimi_marker and e[0] == config.KIMI_BASE_URL]
+            random.shuffle(free)
+            return free + paid
     # Kimi — основной, не используем NIM/другие API
     if not config.KIMI_API_KEY:
         raise RuntimeError("KIMI_API_KEY не задан (требуется подписка https://kimi.com/code/console)")
