@@ -78,7 +78,7 @@ def distill_batch(ado, batch: int, partition: str | None,
             key = archive_blob(f"cases/{vid}.json", case.model_dump_json())
             state = "distilled" if not case.off_topic else "offtopic"
             # РЕЗУЛЬТАТ НАЗАД В ВОРКАЙТЕМ: кейс дописывается в тело тикета
-            ado.append_description(wi_id,
+            ado.replace_case_block(wi_id,
                 f"<hr><b>RepairCase</b> (system: {_html.escape(case.system or '')}, "
                 f"conf {case.confidence}) <pre>{_html.escape(case.model_dump_json())}</pre>")
             ado.set_state(wi_id, state,
