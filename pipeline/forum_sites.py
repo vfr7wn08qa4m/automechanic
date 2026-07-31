@@ -45,17 +45,11 @@ SITES: dict[str, ForumSite] = {
         listing_re=r"https://carmasters\.org/forum/\d+[^\"#?]*",
         next_page="{base}/page/{n}/",   # IPS: /forum/3971-bmw/page/2/
     ),
-    "drive2.ru": ForumSite(
-        host="www.drive2.ru", engine="custom", lang="ru", zone="a",
-        # листинг сообществ грузится JS -> обходим из seed-ссылок на записи
-        # (пополняй из HAR: страницы /c/{id} и /l/{id})
-        seeds=[
-            "https://www.drive2.ru/c/734240946840933339/",
-            "https://www.drive2.ru/communities/729091659010147439/",
-        ],
-        thread_re=r"https://www\.drive2\.ru/[cl]/\d+[^\"#?]*",
-        mode="seed",
-    ),
+    # drive2.ru УБРАН отсюда (2026-07-31): этот 2-seed'овый заглушечный вход
+    # давно вытеснен полноценным выделенным модулем pipeline/drive2.py
+    # (scripts/local_crawl_drive2.py) — свой каталог сообществ+машин на 3509+
+    # страниц-источников, курсор, обход DDoS-Guard с домашнего IP. Держать оба
+    # входа значило дублировать обход одного хоста впустую.
 
     # --- ЗОНА B: EN (доступ через Worker-реле CRAWL_PROXY) -------------------
     "bimmerforums.com": ForumSite(
