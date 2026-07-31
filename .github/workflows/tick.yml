@@ -105,6 +105,13 @@ jobs:
           DISTILL_BASE_URL: ${{ secrets.DISTILL_BASE_URL }}
           DISTILL_MODEL: ${{ secrets.DISTILL_MODEL }}
           DISTILL_ENDPOINTS: ${{ secrets.DISTILL_ENDPOINTS }}
+          # без этих трёх переменных DISTILL_ENDPOINTS ссылается на несуществующие
+          # env-имена — os.getenv возвращает "", и _endpoints() тихо пропускает все
+          # 3 ключа Gemini, оставляя в каскаде один Kimi (найдено 2026-07-31: healthcheck
+          # на кольце пробовал ТОЛЬКО k3, хотя секреты GEMINI_KEY_1/2/3 были на месте).
+          GEMINI_KEY_1: ${{ secrets.GEMINI_KEY_1 }}
+          GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}
+          GEMINI_KEY_3: ${{ secrets.GEMINI_KEY_3 }}
           DISTILL_MAX_TOKENS: ${{ secrets.DISTILL_MAX_TOKENS }}
           DISTILL_TIMEOUT_SECONDS: ${{ secrets.DISTILL_TIMEOUT_SECONDS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
