@@ -498,6 +498,41 @@ class AdoClient:
                 return False   # кто-то захватил в ту же секунду
             raise
 
+    def ring_lock_note(self, holder: str, task: str) -> None:
+        """Записать в замок, ЧЕМ узел занят прямо сейчас — для живого борда.
+
+        Замок и так пишется раз в тик и уже хранит {holder, ts}; дописываем сюда
+        же имя выбранной задачи. Борду этого хватает, чтобы показать «gh14 —
+        дистилляция, 2 мин» вместо безликого «идёт»: узнать задачу иначе нельзя,
+        лог активного прогона GitHub не отдаёт, а имя шага у всех задач одно.
+        Тихо игнорируем сбой: подпись для UI не стоит того, чтобы ронять тик.
+        """
+        import time as _time
+        wid = self._ring_lock_item(create=False)
+        if not wid:
+            return
+        try:
+            wi = self.get(wid)
+            state = self._lock_state_read(wi)
+            if state.get("holder") != holder:
+                return              # замок уже чужой — не перетираем
+            state["task"] = task
+            state["task_ts"] = _time.time()
+            self._patch(wid, [{"op": "add", "path": "/fields/System.Description",
+                               "value": self._lock_state_write(state)}])
+        except Exception:  # noqa: BLE001
+            pass
+
+    def ring_lock_state(self) -> dict:
+        """Что записано в замке: {holder, ts, task, task_ts} — читает борд."""
+        wid = self._ring_lock_item(create=False)
+        if not wid:
+            return {}
+        try:
+            return self._lock_state_read(self.get(wid))
+        except Exception:  # noqa: BLE001
+            return {}
+
     def ring_lock_release(self, holder: str) -> None:
         """Снять замок, если он всё ещё за нами (не трогаем чужой)."""
         wid = self._ring_lock_item(create=False)
