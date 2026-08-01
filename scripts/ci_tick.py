@@ -403,6 +403,8 @@ def _main_locked(ado, args, holder: str) -> None:
         # Рандомная или принудительная задача (оригинальное поведение)
         task = args.task or _choose_task(ado)
         print(f"[tick] выбранная задача: {task} (batch={args.batch}, partition={args.partition})")
+        # отметить в замке, чем заняты — борд показывает это вживую (см. ado.ring_lock_note)
+        ado.ring_lock_note(holder, task)
         try:
             worked = _run_task(task, ado, args.batch, args.partition)
             if worked:
