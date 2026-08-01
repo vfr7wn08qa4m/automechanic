@@ -534,7 +534,15 @@ class AdoClient:
             return {}
 
     def ring_lock_release(self, holder: str) -> None:
-        """Снять замок, если он всё ещё за нами (не трогаем чужой)."""
+        """Снять замок, если он всё ещё за нами (не трогаем чужой).
+
+        holder/ts обнуляем — иначе следующий узел не сможет взять замок. А вот
+        ЧТО делали (last_*) оставляем: между тиками замок пуст (сдали и ждём,
+        пока GitHub выдаст раннер следующему), и без этой памяти живая строка на
+        борде мигала бы, пропадая в каждую паузу. Теперь борд показывает либо
+        «идёт X», либо «последнее: X, N мин назад» — и всегда честен.
+        """
+        import time as _time
         wid = self._ring_lock_item(create=False)
         if not wid:
             return
@@ -542,10 +550,13 @@ class AdoClient:
         state = self._lock_state_read(wi)
         if state.get("holder") != holder:
             return
+        tail = {"last_holder": holder, "last_ts": _time.time()}
+        if state.get("task"):
+            tail["last_task"] = state["task"]
         try:
             self._patch(wid, [{"op": "test", "path": "/rev", "value": wi["rev"]},
                               {"op": "add", "path": "/fields/System.Description",
-                               "value": self._lock_state_write({})}])
+                               "value": self._lock_state_write(tail)}])
         except requests.HTTPError:
             pass   # не критично: TTL освободит сам
 
