@@ -487,7 +487,14 @@ class AdoClient:
         age_min = (_time.time() - float(state.get("ts", 0))) / 60.0
         if state.get("holder") and state["holder"] != holder and age_min < self.RING_LOCK_TTL_MIN:
             return False
-        payload = self._lock_state_write({"holder": holder, "ts": _time.time()})
+        # last_* переносим: узел от старта до выбора задачи ~2 мин (checkout,
+        # зависимости), и без этой памяти живая строка на борде на эти минуты
+        # пустела бы — «кольцо работает, а что делает — неизвестно».
+        fresh = {"holder": holder, "ts": _time.time()}
+        for k in ("last_holder", "last_task", "last_ts"):
+            if state.get(k):
+                fresh[k] = state[k]
+        payload = self._lock_state_write(fresh)
         ops = [{"op": "test", "path": "/rev", "value": wi["rev"]},
                {"op": "add", "path": "/fields/System.Description", "value": payload}]
         try:
