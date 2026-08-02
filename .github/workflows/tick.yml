@@ -119,6 +119,7 @@ jobs:
           GEMINI_KEY_6: ${{ secrets.GEMINI_KEY_6 }}
           GEMINI_KEY_7: ${{ secrets.GEMINI_KEY_7 }}
           GEMINI_KEY_8: ${{ secrets.GEMINI_KEY_8 }}
+          GEMINI_KEY_9: ${{ secrets.GEMINI_KEY_9 }}
           DISTILL_MAX_TOKENS: ${{ secrets.DISTILL_MAX_TOKENS }}
           DISTILL_TIMEOUT_SECONDS: ${{ secrets.DISTILL_TIMEOUT_SECONDS }}
           NIM_API_KEY: ${{ secrets.NIM_API_KEY }}
