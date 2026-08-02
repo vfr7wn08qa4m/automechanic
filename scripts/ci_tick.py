@@ -253,8 +253,13 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
             print("[tick] distill API недоступен, очередь state:subs не трогаем")
             return False
         from scripts.local_distill_batch import distill_batch
-        # Дистилляция — долгий API-вызов; не даём одному тику съесть весь таймаут.
-        n = distill_batch(ado, min(batch, 5), partition)
+        # СВОЙ размер порции, независимый от общего --batch. Дистилляция — узкое
+        # место конвейера, и общий batch (по умолчанию 3) держал её на ~1090
+        # кейсов в сутки, тогда как форумы наливают ~1365 — очередь росла, а не
+        # таяла. Пул ключей Gemini позволяет больше: порция 5 даёт ~1800/сутки и
+        # разворачивает баланс. Верхний предел всё равно нужен — дистилляция это
+        # долгий API-вызов, и один тик не должен съесть весь таймаут джобы (45 мин).
+        n = distill_batch(ado, int(os.getenv("DISTILL_BATCH", "5")), partition)
         return n > 0
 
     if task == "embed":
