@@ -491,7 +491,7 @@ class AdoClient:
         # зависимости), и без этой памяти живая строка на борде на эти минуты
         # пустела бы — «кольцо работает, а что делает — неизвестно».
         fresh = {"holder": holder, "ts": _time.time()}
-        for k in ("last_holder", "last_task", "last_ts"):
+        for k in ("last_holder", "last_task", "last_ts", "quota_until"):
             if state.get(k):
                 fresh[k] = state[k]
         payload = self._lock_state_write(fresh)
@@ -530,6 +530,38 @@ class AdoClient:
         except Exception:  # noqa: BLE001
             pass
 
+    # Пометка «суточная квота дистилляции выбрана». Живёт в том же замке эстафеты:
+    # он читается каждым тиком и бордом, отдельного хранилища заводить незачем.
+    def ring_quota_mark(self, hours: float = 5.0) -> None:
+        """Запомнить, что все эндпоинты дистилляции отдали 429 по квоте.
+
+        Пока метка свежа, _choose_task не выбирает distill: иначе кольцо до
+        самого сброса квоты продолжает отдавать ему больше половины тиков, и
+        каждый такой тик поднимает раннер, ставит зависимости и упирается в 429.
+        Тикеты при этом не портятся (откладываются как временная ошибка), но
+        несколько часов работы кольца в сутки уходят вхолостую.
+        """
+        import time as _time
+        wid = self._ring_lock_item(create=True)
+        if not wid:
+            return
+        try:
+            wi = self.get(wid)
+            state = self._lock_state_read(wi)
+            state["quota_until"] = _time.time() + hours * 3600
+            self._patch(wid, [{"op": "add", "path": "/fields/System.Description",
+                               "value": self._lock_state_write(state)}])
+        except Exception:  # noqa: BLE001
+            pass
+
+    def ring_quota_dead(self) -> bool:
+        """Свежа ли пометка исчерпанной квоты (True — distill сейчас бессмыслен)."""
+        import time as _time
+        try:
+            return float(self.ring_lock_state().get("quota_until") or 0) > _time.time()
+        except Exception:  # noqa: BLE001
+            return False
+
     def ring_lock_state(self) -> dict:
         """Что записано в замке: {holder, ts, task, task_ts} — читает борд."""
         wid = self._ring_lock_item(create=False)
@@ -560,6 +592,8 @@ class AdoClient:
         tail = {"last_holder": holder, "last_ts": _time.time()}
         if state.get("task"):
             tail["last_task"] = state["task"]
+        if state.get("quota_until"):        # пометка квоты переживает сдачу замка
+            tail["quota_until"] = state["quota_until"]
         try:
             self._patch(wid, [{"op": "test", "path": "/rev", "value": wi["rev"]},
                               {"op": "add", "path": "/fields/System.Description",
