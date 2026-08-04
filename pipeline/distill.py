@@ -82,16 +82,24 @@ def _endpoints() -> list[tuple[str, str, str]]:
             if key:  # эндпоинт без ключа в env молча пропускаем
                 out.append((base_url, key, model))
         if out:
-            # Перемешиваем НЕ-Kimi эндпоинты (обычно пул бесплатных ключей вроде
-            # Gemini) так, чтобы разные процессы/тики кольца не долбили один и тот
-            # же первый ключ подряд — иначе именно он первым упирается в дневной
-            # лимит, а остальные простаивают. Kimi (платный, лимит на весь пул
-            # общий) оставляем в исходном порядке — обычно последним в каскаде.
-            kimi_marker = "kimi" in config.KIMI_BASE_URL.lower()
-            free = [e for e in out if not (kimi_marker and e[0] == config.KIMI_BASE_URL)]
-            paid = [e for e in out if kimi_marker and e[0] == config.KIMI_BASE_URL]
-            random.shuffle(free)
-            return free + paid
+            # Перемешиваем ВЕСЬ каскад, включая Kimi. Раньше Kimi держали строго
+            # последней («резерв»), и до неё доходило только когда все ключи Gemini
+            # уже выбраны. Итог 2026-08-04: недельная квота K3 израсходована на 4%
+            # при сбросе через 6 дней — почти вся мощность простаивала, хотя
+            # дистилляция и есть узкое место конвейера. Лимиты у Gemini (суточный
+            # на ключ) и Kimi (недельный) независимы, поэтому равномерная нагрузка
+            # строго выгоднее: тратим оба ресурса параллельно, а не один после
+            # исчерпания другого. Порядок случайный на каждый вызов — так тики
+            # кольца не долбят один и тот же эндпоинт подряд.
+            # KIMI_LAST=1 вернёт старое поведение (Kimi только как резерв).
+            if os.getenv("KIMI_LAST") == "1":
+                kimi_marker = "kimi" in config.KIMI_BASE_URL.lower()
+                free = [e for e in out if not (kimi_marker and e[0] == config.KIMI_BASE_URL)]
+                paid = [e for e in out if kimi_marker and e[0] == config.KIMI_BASE_URL]
+                random.shuffle(free)
+                return free + paid
+            random.shuffle(out)
+            return out
     # Kimi — основной, не используем NIM/другие API
     if not config.KIMI_API_KEY:
         raise RuntimeError("KIMI_API_KEY не задан (требуется подписка https://kimi.com/code/console)")
