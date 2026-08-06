@@ -261,7 +261,14 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
             print("[tick] distill API недоступен, очередь state:subs не трогаем")
             # 429 по квоте на ВСЕХ эндпоинтах — до сброса ходить сюда бессмысленно:
             # ставим метку, и _choose_task перестанет выбирать distill (см. выше).
-            if "429" in msg and re.search(r"quota|usage limit|billing cycle", msg, re.I):
+            # Требуем 429 в КАЖДОЙ строке ошибки, а не где-нибудь в склейке: msg
+            # это " | ".join по всем эндпоинтам, и прежнее условие срабатывало,
+            # когда один ключ выбрал квоту, а остальные отвалились по сети или
+            # таймауту. Метка глушит дистилляцию во всём кольце, так что ставить
+            # её можно только когда против неё говорит каждый эндпоинт.
+            parts = [p for p in msg.split(" | ") if p.strip()]
+            if (parts and all("429" in p for p in parts)
+                    and re.search(r"quota|usage limit|billing cycle", msg, re.I)):
                 ado.ring_quota_mark()
                 print("[tick] помечаю квоту как выбранную — кольцо займётся другим")
             return False
