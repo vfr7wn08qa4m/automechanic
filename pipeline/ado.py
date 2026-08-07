@@ -37,6 +37,13 @@ STATE_MAP = {
     "offtopic": "Removed",
 }
 
+# Карантин: тикет лежит в своём состоянии, но конвейер его НЕ БЕРЁТ. Нужен, когда
+# материал в теле заведомо неполный и его надо перекачать ДО обработки — иначе
+# стадия сожжёт квоту на огрызке и запишет испорченный кейс (drive2: парсер клал
+# только тело записи без обсуждения, ~11% материала; 14.7к тикетов в subs).
+# Состояние для этого не годится: New заберёт стадия subs, Removed = «мусор».
+HOLD_TAG = "refetch-pending"
+
 
 def _wiql_quote(v: str) -> str:
     return v.replace("'", "''")
@@ -117,6 +124,33 @@ class AdoClient:
             json=ops, headers={"Content-Type": "application/json-patch+json"}, timeout=30)
         r.raise_for_status()
         return r.json()
+
+    def patch_batch(self, jobs: list[tuple[int, list[dict]]]) -> list[tuple[int, int]]:
+        """Пакетный PATCH: [(wi_id, ops)] -> [(wi_id, http_code)]. До 200 за запрос.
+
+        Одиночный _patch — это RTT на тикет; на массовых операциях (пометить
+        14.7к тикетов) это часы. Батч-endpoint org-уровня делает то же за минуты.
+        Ошибка отдельного элемента НЕ роняет батч — код возвращается по каждому.
+        """
+        url = f"https://dev.azure.com/{self.org}/_apis/wit/$batch?api-version={API}"
+        out: list[tuple[int, int]] = []
+        for i in range(0, len(jobs), 200):
+            chunk = jobs[i:i + 200]
+            payload = [{
+                "method": "PATCH",
+                "uri": f"/_apis/wit/workitems/{wid}?api-version={API}",
+                "headers": {"Content-Type": "application/json-patch+json"},
+                "body": ops,
+            } for wid, ops in chunk]
+            r = self.s.post(url, json=payload, timeout=120)
+            r.raise_for_status()
+            vals = r.json().get("value", [])
+            for (wid, _), res in zip(chunk, vals):
+                out.append((wid, int(res.get("code", 0))))
+            if len(vals) != len(chunk):          # ответ короче запроса — не молчим
+                for wid, _ in chunk[len(vals):]:
+                    out.append((wid, 0))
+        return out
 
     def _create(self, wi_type: str, ops: list[dict]) -> int:
         r = self.s.post(
@@ -672,8 +706,14 @@ class AdoClient:
         return out
 
     def query_by_state(self, state: str, top: int = 50,
-                       partition: str | None = None) -> list[int]:
-        """Task'и в логическом состоянии (маппится на реальный System.State)."""
+                       partition: str | None = None,
+                       include_held: bool = False) -> list[int]:
+        """Task'и в логическом состоянии (маппится на реальный System.State).
+
+        Тикеты с тегом HOLD_TAG отсечены на сервере: они ждут перекачки материала
+        и брать их в работу нельзя (см. HOLD_TAG). include_held=True — для
+        сервисных скриптов, которые как раз с карантином и работают.
+        """
         real = STATE_MAP.get(state, state)
         # Ограничиваем выборку НА СЕРВЕРЕ (ORDER BY CreatedDate ASC -> самые старые
         # первыми, ровно что нужно конвейеру). Иначе на бэклоге >20000 ADO вернёт
@@ -684,12 +724,14 @@ class AdoClient:
         proj = _wiql_quote(self.project)
         workitem_type = _wiql_quote(config.ADO_WORKITEM_TYPE)
         state = _wiql_quote(real)
+        hold = "" if include_held else f"AND [System.Tags] NOT CONTAINS '{HOLD_TAG}' "
         ids = self._wiql(
             "SELECT [System.Id] FROM WorkItems "
             f"WHERE [System.TeamProject] = '{proj}' "
             f"AND [System.WorkItemType] = '{workitem_type}' "
             f"AND [System.State] = '{state}' "
             "AND [System.Tags] CONTAINS 'auto-mech' "
+            f"{hold}"
             "ORDER BY [System.CreatedDate] ASC", top=srv_top)
         # partition оставлен опцией; по умолчанию не делим — полагаемся на claim
         if partition == "even":
