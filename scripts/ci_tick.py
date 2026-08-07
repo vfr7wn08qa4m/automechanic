@@ -254,21 +254,29 @@ def _run_task(task: str, ado, batch: int, partition: str | None) -> bool:
 
     if task == "distill":
         # Перед тем как трогать очередь state:subs, проверяем API дистилляции в облаке.
+        # _QUOTA_RE — тот же признак исчерпания, по которому каскад в distill.py
+        # решает не ретраить ключ. Держим одно определение на оба места, иначе
+        # они разъезжаются (так и вышло с «429 в каждой строке»).
+        from pipeline.distill import _QUOTA_RE
         from pipeline.distill import healthcheck as distill_healthcheck
         ok, msg = distill_healthcheck()
         print(f"[tick] distill healthcheck: {msg}")
         if not ok:
             print("[tick] distill API недоступен, очередь state:subs не трогаем")
-            # 429 по квоте на ВСЕХ эндпоинтах — до сброса ходить сюда бессмысленно:
+            # Квота выбрана на ВСЕХ эндпоинтах — до сброса ходить сюда бессмысленно:
             # ставим метку, и _choose_task перестанет выбирать distill (см. выше).
-            # Требуем 429 в КАЖДОЙ строке ошибки, а не где-нибудь в склейке: msg
-            # это " | ".join по всем эндпоинтам, и прежнее условие срабатывало,
-            # когда один ключ выбрал квоту, а остальные отвалились по сети или
-            # таймауту. Метка глушит дистилляцию во всём кольце, так что ставить
-            # её можно только когда против неё говорит каждый эндпоинт.
+            # Метка глушит дистилляцию во всём кольце, поэтому требуем, чтобы про
+            # исчерпание говорила КАЖДАЯ строка (msg — это " | ".join по всем
+            # эндпоинтам): один выбранный ключ на фоне сетевых сбоев у остальных
+            # поводом не является.
+            # Судим по СМЫСЛУ ошибки, а не по номеру кода. Сначала здесь стояло
+            # «429 в каждой строке», и это молча промахивалось: Gemini отдаёт 429
+            # «You exceeded your current quota», а Kimi на исчерпанной недельной
+            # квоте — 403 «You've reached your usage limit for this billing cycle».
+            # Из-за одного 403 метка не вставала никогда, и 2026-08-07 кольцо
+            # потратило 34 тика из 87 на стук в мёртвую квоту.
             parts = [p for p in msg.split(" | ") if p.strip()]
-            if (parts and all("429" in p for p in parts)
-                    and re.search(r"quota|usage limit|billing cycle", msg, re.I)):
+            if parts and all(_QUOTA_RE.search(p) for p in parts):
                 ado.ring_quota_mark()
                 print("[tick] помечаю квоту как выбранную — кольцо займётся другим")
             return False
